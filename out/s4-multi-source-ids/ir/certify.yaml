@@ -122,7 +122,15 @@ survivorship:
     # Adding the normalized keys to CrossRefRule instead put pipeline output under
     # UNTIL_NEXT_USER_CHANGE, where a steward edit survives until the next enricher run
     # silently reverts it. CA-012 caught that within a minute of the change.
-    attributes: [NormalizedName, ErpKeyNorm, BillingKeyNorm]
+    # CA-012 closed 2026-08-08: Address.StateCodeNorm and Address.Zip5 are NormalizeAddress
+    # output and belong here, under NO_OVERRIDE, for the exact reason the NormalizedName
+    # keys do — a steward edit to a computed value is silently reverted by the next run.
+    # They used to sit in AddressRule (UNTIL_NEXT_USER_CHANGE) mixed with the raw
+    # StateCode/Zip; a rule carries ONE override strategy, so the fix is to move the
+    # computed members here rather than change AddressRule's strategy and forbid override
+    # on the raw publisher-supplied fields too.
+    attributes: [NormalizedName, ErpKeyNorm, BillingKeyNorm,
+                 Address.StateCodeNorm, Address.Zip5]
     publisher_rankings: [Erp, Billing, Sfdc]
     override_strategy: NO_OVERRIDE
   # MEMBER-LEVEL, not the bare complex attribute. `Address` has no physical column of
@@ -136,8 +144,12 @@ survivorship:
   - entity: Customer
     name: AddressRule
     strategy: PREFERRED_PUBLISHER
-    attributes: [Address.StateCode, Address.Zip, Address.StateCodeNorm, Address.Zip5]
+    # The RAW, publisher-supplied address fields only. StateCodeNorm/Zip5 moved to
+    # DerivedRule (NO_OVERRIDE) — see CA-012 above. These two are genuinely editable:
+    # a steward correcting a mistyped state or ZIP is a legitimate override.
+    attributes: [Address.StateCode, Address.Zip]
     publisher_rankings: [Billing, Erp, Sfdc]
+    override_strategy: UNTIL_NEXT_USER_CHANGE
   # Cross-references consolidate like any attribute: if two publishers disagree about
   # ERP's key for the same company, one wins and the golden cross-reference silently
   # points at the wrong ERP row. Ranking makes that deterministic.

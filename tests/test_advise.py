@@ -416,3 +416,56 @@ def test_a_bin_is_never_coarser_than_the_equality_it_serves(s4):
         "the selective attribute must be in the bin, not just in the condition"
     for key in rule.binning:
         assert key in rule.condition, f"{key} bins on something the rule never tests"
+
+
+# ------------------------------------------------ CA-019 / CA-020 (LESSONS §58)
+def _s3():
+    d = ROOT / "out/s3-three-sources/ir"
+    if not (d / "app.yaml").exists():
+        pytest.skip("s3 IR not present")
+    return IR.load(d / "model.yaml", d / "certify.yaml", d / "app.yaml")
+
+
+def test_ca019_a_workflow_that_discards_authored_data_is_asked_about():
+    """Measured twice on 2026-08-08: the instance COMPLETED and no load was minted.
+    The stepper authors, nothing submits, the steward's edit evaporates.
+
+    s3 now carries the §58 FIX — a SUBMIT automation running INTEGRATE_DATA — so the
+    shipped scenario has a submit path and does NOT fire. Stripping that step reinstates
+    the discard, and then the question is asked."""
+    ir = _s3()
+    assert not [g for g in advise(ir) if g.rule == "CA-019"], \
+        "shipped s3 has a SUBMIT automation, so nothing is discarded"
+
+    # Remove the submit path: the review task's edit now evaporates at completion.
+    ir_no_submit = copy.deepcopy(ir)
+    w = ir_no_submit.model_ir.workflows[0]
+    w.steps = [s for s in w.steps
+               if not (s.type == "Automation" and s.automation_type == "SUBMIT_DATA")]
+    hits = [g for g in advise(ir_no_submit) if g.rule == "CA-019"]
+    assert len(hits) == 1 and "AuthorParty" in hits[0].question
+    assert "discarded" in hits[0].question
+
+    # A stepper that only VIEWS (no form step) does not fire: nothing is authored.
+    ir2 = copy.deepcopy(ir_no_submit)
+    ir2.app.steppers[0].steps = [
+        s for s in ir2.app.steppers[0].steps if s.kind != "form"]
+    assert not [g for g in advise(ir2) if g.rule == "CA-019"]
+
+
+def test_ca020_an_unlabelled_user_transition_is_asked_about():
+    """The steward's primary action rendered as a button called OUTGOING, because
+    Transition.name defaults to 'outgoing' and nothing set a label. s3's IR now
+    labels it, so the shipped scenario is clean and stripping the label fires."""
+    ir = _s3()
+    assert not [g for g in advise(ir) if g.rule == "CA-020"], \
+        "the shipped s3 IR labels its user-facing transition"
+    ir2 = copy.deepcopy(ir)
+    for st in ir2.model_ir.workflows[0].steps:
+        if st.type == "UserTask":
+            st.transitions[0].label = None
+    hits = [g for g in advise(ir2) if g.rule == "CA-020"]
+    assert len(hits) == 1 and "'OUTGOING'" in hits[0].question
+    # System-step edges render for nobody: the StartEvent's unlabelled transition
+    # must never fire this rule.
+    assert all("start" not in g.where.split("/")[-1] for g in hits)

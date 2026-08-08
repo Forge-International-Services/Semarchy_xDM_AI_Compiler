@@ -363,6 +363,22 @@ class Transition(_Base):
     label: str | None = None
 
 
+class Route(_Base):
+    """One CONDITIONAL edge out of a Router. If `condition` (SemQL) holds the instance
+    proceeds to `to_step`.
+
+    Measured from `harvest/workflow-hardening-constructs.json` (operator-built in the
+    Workflow Builder and exported over REST, D12). A route carries the same three layout
+    keys every edge does — `labelDistance` / `labelOffset` / `bendPoints` — recorded by
+    the builder where a human dragged the label, and emitted at their observed defaults
+    (0.5 / 0.0 / []).
+    """
+    to_step: str
+    name: str
+    label: str | None = None
+    condition: str = ""                        # SemQL
+
+
 class WorkflowStep(_Base):
     """One node. `type` decides which fields are meaningful, and the emitter refuses a
     combination the corpus does not attest rather than emitting a plausible shape."""
@@ -400,11 +416,38 @@ class WorkflowStep(_Base):
     database_procedure_name: str | None = None
     delete_type: str = "SOFT_DELETE"
     condition_for_deletion: str | None = None
+    #: SUBMIT automation only. `submit_user_expression` is the SemQL that resolves the
+    #: user the load is submitted AS; `root_entity` scopes the submit. Both are `null` in
+    #: the harvested SUBMIT step and settable — measured from
+    #: `harvest/workflow-hardening-constructs.json` (the LESSONS §58 submit path).
+    submit_user_expression: str | None = None
+    root_entity: str | None = None
 
-    #: A UserTask carries `transitions` (a LIST — one per outcome); an Automation
-    #: carries `transition` (SINGULAR). That asymmetry is what the product wrote and it
-    #: is reproduced rather than normalised.
+    # --- Router. Conditional fan-out: the first route whose SemQL `condition` holds wins.
+    routes: list[Route] = Field(default_factory=list)
+
+    # --- ParallelBlock. Every branch runs concurrently; the singular `transition` (stored
+    # in `transitions`, like an Automation) is where the instance goes once all rejoin.
+    branches: list["Branch"] = Field(default_factory=list)
+
+    #: A UserTask carries `transitions` (a LIST — one per outcome); an Automation and a
+    #: ParallelBlock carry `transition` (SINGULAR); a Router carries `routes`. That
+    #: asymmetry is what the product wrote and it is reproduced rather than normalised.
     transitions: list[Transition] = Field(default_factory=list)
+
+
+class Branch(_Base):
+    """One branch of a ParallelBlock — a named lane that runs its own `steps`.
+
+    Measured from `harvest/workflow-hardening-constructs.json`, whose two branches carry
+    empty `steps` lists. `icon` is a display glyph the builder always sets (observed
+    values `images://default/DOC.svg` and `.../PDF.svg`); it defaults to the first
+    observed value rather than a null the product has never written.
+    """
+    name: str
+    label: str | None = None
+    icon: str = "images://default/DOC.svg"
+    steps: list[WorkflowStep] = Field(default_factory=list)
 
 
 class RetentionPolicy(_Base):
@@ -429,6 +472,15 @@ class Workflow(_Base):
     #: it — `startupContext.contextType`. It sat here unused and unemitted until
     #: 2026-08-06: a field the operator could set and the compiler silently dropped.
     start_context: StartContext | None = None
+    #: START_FROM_SELECTION only. The entity whose records the task opens, the record
+    #: pool it selects from, and the SemQL filter that picks WHICH record ("open the
+    #: flagged one"). Measured from `harvest/workflow-hardening-constructs.json`: a
+    #: SELECTION context carries `authoredEntity` set and `conditionOnSelection` as the
+    #: filter (null in the harvest, settable). START_FROM_NOTHING leaves `authoredEntity`
+    #: null, which is what these defaults reproduce.
+    selection_authored_entity: str | None = None
+    selection_source_type: str = "GOLDEN_DATA"
+    condition_on_selection: str | None = None
     steps: list[WorkflowStep] = Field(default_factory=list)
     retention: RetentionPolicy = Field(default_factory=RetentionPolicy)
     notify_admin_on_due_date: bool = False

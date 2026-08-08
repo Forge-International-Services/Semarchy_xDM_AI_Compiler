@@ -35,8 +35,15 @@ step types this module then invented — and the invention had a specific failur
 
 The fallback that produced those was `_plain()`, on the reasoning that "only the fields
 EVERY step carries" must be safe. The valid file destroys that reasoning: a StartEvent
-carries nine keys and an EndEvent carries three, so there is no common shape. Router and
-ParallelBlock are therefore refused now rather than approximated.
+carries nine keys and an EndEvent carries three, so there is no common shape.
+
+Router and ParallelBlock were refused for the same reason until a second product export —
+`harvest/workflow-hardening-constructs.json` (operator-built in the Workflow Builder,
+exported over REST, D12) — attested both, along with the SUBMIT automation and the
+START_FROM_SELECTION start context. Each is now emitted key-for-key against that file;
+what remains unharvested (the DELETE / DATABASE_PROCEDURE automation `type` strings,
+START_FROM_COMPLETED_BATCH, START_FROM_SELECTED_PARENT) is still refused, each refusal
+naming the same harvest loop as the way out.
 """
 from __future__ import annotations
 
@@ -77,16 +84,21 @@ def _ref(*path: str | None) -> dict | None:
 #: identity: the builder's "Start from Empty Selection" goes on the wire as
 #: `START_FROM_NOTHING`. Our literal came from `docs/Design/workflows/` and was wrong.
 #:
-#: The other three are `None` — deliberately, so that using one is a REFUSAL naming the
+#: The remaining two are `None` — deliberately, so that using one is a REFUSAL naming the
 #: harvest loop rather than a plausible string that imports at 204 and fails later. One
 #: measured disagreement between the docs' vocabulary and the wire's is enough to
-#: distrust the rest of the doc-derived enum; guessing that the other three happen to
-#: match would be assuming the exception is the rule.
+#: distrust the rest of the doc-derived enum; guessing that the others happen to match
+#: would be assuming the exception is the rule.
+#:
+#: START_FROM_SELECTION is now MEASURED (harvest/workflow-hardening-constructs.json) and,
+#: unlike START_FROM_EMPTY_SELECTION, its wire spelling IS the docs' name — which is
+#: exactly why it had to be harvested rather than assumed: EMPTY_SELECTION proved the
+#: mapping is not the identity, so SELECTION matching had to be seen, not inferred.
 START_CONTEXT_WIRE: dict[str, str | None] = {
-    "START_FROM_EMPTY_SELECTION": "START_FROM_NOTHING",   # MEASURED 2026-08-06
+    "START_FROM_EMPTY_SELECTION": "START_FROM_NOTHING",     # MEASURED 2026-08-06
+    "START_FROM_SELECTION": "START_FROM_SELECTION",         # MEASURED (hardening harvest)
     "START_FROM_COMPLETED_BATCH": None,
     "START_FROM_SELECTED_PARENT": None,
-    "START_FROM_SELECTION": None,
 }
 
 
@@ -230,23 +242,33 @@ def _user_task(s: WorkflowStep, i: int) -> dict:
 def _automation(s: WorkflowStep, i: int) -> dict:
     if s.automation_type is None:
         raise WorkflowEmitError(
-            f"Automation {s.name!r} has no automation_type. The five kinds differ by "
+            f"Automation {s.name!r} has no automation_type. The kinds differ by "
             f"which fields carry meaning, so there is no neutral default.")
+    if s.automation_type in UNATTESTED_WIRE_TYPES:
+        raise WorkflowEmitError(
+            f"Automation {s.name!r} is type {s.automation_type!r}, whose `type` wire "
+            f"spelling has NEVER appeared in an export. Only EMAIL (wire "
+            f"{WIRE_TYPE['EMAIL']!r}) and SUBMIT_DATA (wire {WIRE_TYPE['SUBMIT_DATA']!r}) "
+            f"are attested — and SUBMIT_DATA proves the label and the wire are not the "
+            f"same string, so the rest cannot be inferred from the builder's labels.\n"
+            f"The way out is the harvest loop, not a guess: build an automation of this "
+            f"kind in the Workflow Builder (operator present, D12), export it into "
+            f"harvest/, and read the `type` string off the file.")
     if s.automation_type == "EMAIL" and not s.to:
         raise WorkflowEmitError(
             f"EMAIL automation {s.name!r} has no recipients. `to[]` empty sends to "
             f"nobody and fails silently rather than at deploy.")
-    if s.automation_type == "SUBMIT_DATA" and not s.integration_job:
-        raise WorkflowEmitError(
-            f"SUBMIT_DATA automation {s.name!r} names no integration job — the whole "
-            f"point of the type is which job it runs.")
-    if s.automation_type == "CALL_PROCEDURE" and not s.database_procedure_name:
-        raise WorkflowEmitError(
-            f"CALL_PROCEDURE automation {s.name!r} names no procedure.")
 
-    # `type` is EMAIL in the sample. The other four are named by the FIELDS the builder
-    # exposes for them, so the wire value for those is not directly attested — see
-    # WORKFLOW_TYPE_WIRE.
+    # The email-only text fields are a MEASURED per-type shape difference: on the EMAIL
+    # automation the product writes them as strings (an unset one is `""`, see
+    # workflow-definition-valid.json's `replyTo`); on the SUBMIT automation it writes them
+    # `null` (workflow-hardening-constructs.json), because they do not apply. Emitting
+    # `""` on a SUBMIT would be a value the product has never written for one.
+    is_email = s.automation_type == "EMAIL"
+
+    # `type` goes on the wire via WIRE_TYPE. EMAIL is EMAIL; SUBMIT_DATA is SUBMIT (the
+    # builder's label is "Submit Data" but the export writes SUBMIT — measured from
+    # harvest/workflow-hardening-constructs.json, LESSONS §51.2 again).
     out = {
         "x-type": "Automation",
         "name": s.name,
@@ -254,22 +276,22 @@ def _automation(s: WorkflowStep, i: int) -> dict:
         "icon": None,
         "position": _position(i),
         "type": WIRE_TYPE[s.automation_type],
-        "rootEntity": None,
+        "rootEntity": _ref(s.root_entity),
         "conditionForDeletion": s.condition_for_deletion,
         "deleteType": s.delete_type,
         "deleteAuthorExpression": None,
         "integrationJob": _ref(s.integration_job),
-        "submitUserExpression": None,
+        "submitUserExpression": s.submit_user_expression,
         "application": _ref(s.application),
-        "replyTo": s.reply_to,
-        "senderName": s.sender_name,
+        "replyTo": s.reply_to if is_email else None,
+        "senderName": s.sender_name if is_email else None,
         "to": [{"name": r.name, "sourceType": r.source_type,
                 "roleValue": _ref(r.role), "semqlValue": r.semql} for r in s.to],
         "recipientMaxCount": s.recipient_max_count,
         "customParameters": [],
-        "subject": s.subject,
+        "subject": s.subject if is_email else None,
         "contentType": s.content_type,
-        "body": s.body,
+        "body": s.body if is_email else None,
         "failOnError": s.fail_on_error,
         "workflowMetadataChanges": [],
         "databaseProcedureName": s.database_procedure_name,
@@ -285,19 +307,22 @@ def _automation(s: WorkflowStep, i: int) -> dict:
     return out
 
 
-#: IR name -> the value the product writes in `type`. Only EMAIL is directly observed;
-#: the rest are named for the fields the builder exposes, and are recorded here so the
-#: guess is in ONE place with a label on it rather than spread through the emitter.
+#: IR name -> the value the product writes in `type`. Two are directly observed now —
+#: EMAIL (workflow-definition-valid.json) and SUBMIT_DATA, whose wire string is SUBMIT
+#: not SUBMIT_DATA (workflow-hardening-constructs.json). The other three are named for
+#: the fields the builder exposes, and their wire values are GUESSES kept in ONE place
+#: with a label rather than spread through the emitter — `_automation` refuses them.
 WIRE_TYPE = {
-    "EMAIL": "EMAIL",
-    "SUBMIT_DATA": "SUBMIT_DATA",
+    "EMAIL": "EMAIL",              # MEASURED (workflow-definition-valid.json)
+    "SUBMIT_DATA": "SUBMIT",       # MEASURED (workflow-hardening-constructs.json)
     "CALL_PROCEDURE": "CALL_PROCEDURE",
     "DELETE_DATA": "DELETE_DATA",
     "SET_METADATA": "SET_METADATA",
 }
-#: The ones above whose wire spelling has NOT been seen in an export. Deploying a
-#: workflow using one of these is the experiment that settles it.
-UNATTESTED_WIRE_TYPES = frozenset(WIRE_TYPE) - {"EMAIL"}
+#: The ones above whose wire spelling has NOT been seen in an export, and which the
+#: emitter therefore refuses. Deploying a workflow using one of these is the experiment
+#: that settles it — until then, the D8 harvest loop is the only way in.
+UNATTESTED_WIRE_TYPES = frozenset(WIRE_TYPE) - {"EMAIL", "SUBMIT_DATA"}
 
 
 def _start_event(s: WorkflowStep, i: int, w) -> dict:
@@ -333,6 +358,13 @@ def _start_event(s: WorkflowStep, i: int, w) -> dict:
             f"The way out is the harvest loop, not a guess: build a workflow with this "
             f"start context in the Workflow Builder (operator present, D12), export it "
             f"into harvest/, and read the spelling off the file.")
+    if ctx == "START_FROM_SELECTION" and not w.selection_authored_entity:
+        raise WorkflowEmitError(
+            f"workflow {w.name!r} starts from a selection but names no "
+            f"selection_authored_entity. START_FROM_SELECTION opens an EXISTING record "
+            f"(the harvested one carries `authoredEntity` set); with none there is "
+            f"nothing to select. Set selection_authored_entity, or use "
+            f"START_FROM_EMPTY_SELECTION to author a new record instead.")
     return {
         "x-type": "StartEvent",
         "name": s.name,
@@ -340,11 +372,14 @@ def _start_event(s: WorkflowStep, i: int, w) -> dict:
         "label": s.label or s.name,
         "initiatorRequiredRole": None,
         "defaultPriority": "NORMAL",
+        # START_FROM_NOTHING leaves `authoredEntity` null and `conditionOnSelection`
+        # null, which these defaults reproduce; START_FROM_SELECTION sets both from the
+        # workflow. Every other key is constant across both attested contexts.
         "startupContext": {
             "contextType": wire,
-            "authoredEntity": None,
-            "selectionSourceType": "GOLDEN_DATA",
-            "conditionOnSelection": None,
+            "authoredEntity": _ref(w.selection_authored_entity),
+            "selectionSourceType": w.selection_source_type,
+            "conditionOnSelection": w.condition_on_selection,
             "integrationJob": None,
             "initiatedAs": None,
             "dataRecordOutputs": [],
@@ -382,20 +417,73 @@ def _end_event(s: WorkflowStep, i: int) -> dict:
     return {"x-type": "EndEvent", "name": s.name, "position": _position(i)}
 
 
-def _plain(s: WorkflowStep, i: int) -> dict:
-    """Router / ParallelBlock — still unattested, and now refused rather than shaped.
+def _route(r) -> dict:
+    """One `routes[]` entry on a Router. `_edge`'s five layout keys, plus `label` and the
+    SemQL `condition` that gates the edge. Measured from
+    harvest/workflow-hardening-constructs.json."""
+    return {
+        "toStep": _ref(r.to_step),
+        "labelDistance": 0.5,
+        "labelOffset": 0.0,
+        "bendPoints": [],
+        "name": r.name,
+        "label": r.label or r.name,
+        "condition": r.condition,
+    }
 
-    Both are in the builder's palette and NEITHER has ever appeared in an export. The
-    old code emitted a plausible five-key shape for them on the reasoning that "only the
-    fields every step carries" is safe. The valid definition destroyed that reasoning:
-    a StartEvent carries nine keys and an EndEvent carries three, so there IS no common
-    shape to fall back on, and the fallback was producing documents no product writes.
-    """
-    raise WorkflowEmitError(
-        f"{s.type} {s.name!r} has no attested shape — no export contains one, and the "
-        f"valid definition proved that step types do NOT share a common key set "
-        f"(StartEvent has 9 keys, EndEvent has 3). Build one in the Workflow Builder "
-        f"(operator present, D12) and export it into harvest/ before generating it.")
+
+def _router(s: WorkflowStep, i: int) -> dict:
+    """Router — a conditional fan-out. NO `transition`: every outgoing edge is a `route`
+    carrying its own SemQL `condition`. Attested by harvest/workflow-hardening-constructs
+    .json; refused before that harvest because no export contained one."""
+    if not s.routes:
+        raise WorkflowEmitError(
+            f"Router {s.name!r} has no routes. A router's whole purpose is to choose an "
+            f"outgoing edge by condition; with none it routes nowhere.")
+    return {
+        "x-type": "Router",
+        "name": s.name,
+        "position": _position(i),
+        "label": s.label or s.name,
+        "routes": [_route(r) for r in s.routes],
+    }
+
+
+def _branch(b) -> dict:
+    """One `branches[]` entry on a ParallelBlock. `icon` is a display glyph the builder
+    always sets. The two harvested branches carry EMPTY `steps`, so the in-branch
+    serialization of a populated branch is unattested — a step inside a branch may or may
+    not carry the same shape it does at top level, and guessing which is exactly the
+    mistake the harvest loop exists to avoid. A non-empty branch is therefore refused."""
+    if b.steps:
+        raise WorkflowEmitError(
+            f"ParallelBlock branch {b.name!r} has {len(b.steps)} nested step(s), whose "
+            f"in-branch shape has never appeared in an export (the harvested branches are "
+            f"empty). Build one in the Workflow Builder (operator present, D12), export it "
+            f"into harvest/, and read the shape off the file before generating it.")
+    return {"name": b.name, "label": b.label or b.name, "icon": b.icon, "steps": []}
+
+
+def _parallel_block(s: WorkflowStep, i: int) -> dict:
+    """ParallelBlock — concurrent branches that rejoin at a SINGULAR `transition` (stored
+    in `transitions`, like an Automation). Attested by
+    harvest/workflow-hardening-constructs.json."""
+    if not s.branches:
+        raise WorkflowEmitError(
+            f"ParallelBlock {s.name!r} has no branches. A parallel block with no lanes "
+            f"has nothing to run in parallel.")
+    if len(s.transitions) > 1:
+        raise WorkflowEmitError(
+            f"ParallelBlock {s.name!r} has {len(s.transitions)} transitions. The product "
+            f"writes `transition` SINGULAR here — the block rejoins to one step.")
+    return {
+        "x-type": "ParallelBlock",
+        "name": s.name,
+        "position": _position(i),
+        "label": s.label or s.name,
+        "branches": [_branch(b) for b in s.branches],
+        "transition": _edge(s.transitions[0]) if s.transitions else None,
+    }
 
 
 def _step(s: WorkflowStep, i: int, w) -> dict:
@@ -407,7 +495,13 @@ def _step(s: WorkflowStep, i: int, w) -> dict:
         return _start_event(s, i, w)
     if s.type == "EndEvent":
         return _end_event(s, i)
-    return _plain(s, i)
+    if s.type == "Router":
+        return _router(s, i)
+    if s.type == "ParallelBlock":
+        return _parallel_block(s, i)
+    raise WorkflowEmitError(
+        f"{s.type} {s.name!r} has no emitter. Build one in the Workflow Builder "
+        f"(operator present, D12) and export it into harvest/ before generating it.")
 
 
 def definition(w: Workflow) -> dict:

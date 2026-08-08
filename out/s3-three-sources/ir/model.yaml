@@ -104,17 +104,25 @@ external_dependencies: []
 #
 #     round-trips != importable != deployable != runnable
 #
-# Deliberately minimal, because s3 is the RUNNING application. One start, one human
-# task, one end. No Automation: four of the five automation `type` wire spellings are
-# unattested (emit_workflow.UNATTESTED_WIRE_TYPES), and an unattested spelling is not
-# something to discover on the hub a steward is using.
+# The semantics this queue always wanted, now that the shapes are MEASURED. A second
+# product export — harvest/workflow-hardening-constructs.json (operator-built in the
+# Workflow Builder, D12) — attested two constructs this section could not use before:
+# START_FROM_SELECTION and the SUBMIT automation. So the flow is now start -> review ->
+# submit -> end:
 #
-# No `start_context` either. The four contexts decide how an instance BEGINS, and the
-# only one that needs nobody to click anything — START_FROM_COMPLETED_BATCH — fires on
-# every finished batch over `root_entities`. Turning that on for a live location means
-# the next INTEGRATE_DATA run opens tasks nobody asked for. Leaving it null keeps the
-# definition startable by REST and by an explicit action, which is what a first deploy
-# should be: something you start on purpose.
+#   - START_FROM_SELECTION opens the FLAGGED record rather than a blank one. Its wire
+#     string turns out to BE the docs' name (unlike START_FROM_NOTHING), which is exactly
+#     why it had to be harvested and not assumed — emit_workflow.START_CONTEXT_WIRE owns
+#     the mapping. `condition_on_selection` is the filter that picks which record.
+#   - a SUBMIT automation runs INTEGRATE_DATA after the steward decides, so the authored
+#     merge/split PERSISTS. This is the concrete LESSONS §58 fix: without it a workflow
+#     authors a decision the next certification never sees. `type` goes on the wire as
+#     SUBMIT (the builder's label is "Submit Data"); `integrationJob` names the job.
+#
+# The three still-unattested automation types (DELETE_DATA, SET_METADATA, CALL_PROCEDURE)
+# and the two still-unattested start contexts (START_FROM_COMPLETED_BATCH,
+# START_FROM_SELECTED_PARENT) remain refused by the emitter — an unattested spelling is
+# not something to discover on the hub a steward is using.
 workflows:
   - name: ReviewQueue
     label: Review Queue
@@ -124,23 +132,34 @@ workflows:
     # selected stepper must be declared in the Entities section" — and neither could
     # have been read out of the draft, which broke both.
     root_entities: [Party]
-    # THE ONLY START CONTEXT WITH A MEASURED WIRE SPELLING. The docs and the builder both
-    # call this "Start from Empty Selection"; the product writes `START_FROM_NOTHING`.
-    # The other three context names are doc-derived and now known to be untrustworthy on
-    # the wire, so `emit_workflow` refuses them rather than guessing.
+    # THE SEMANTICALLY CORRECT CONTEXT, now that it is MEASURED. A review queue opens the
+    # FLAGGED record — pick the party with a suggested merge and work it — which is what
+    # START_FROM_SELECTION does; START_FROM_EMPTY_SELECTION (wire `START_FROM_NOTHING`)
+    # would author a NEW record, the wrong verb for a queue. This was a deliberate probe
+    # value until 2026-08-08, when harvest/workflow-hardening-constructs.json attested the
+    # SELECTION shape and this line could finally say what it meant.
     #
-    # AND IT IS SEMANTICALLY WRONG HERE, which is worth saying out loud rather than
-    # hiding behind the fact that it compiles. "Empty selection" means AUTHOR NEW
-    # RECORDS; a review queue wants START_FROM_SELECTION — pick the flagged party and
-    # work it. This probe is measuring whether a generated workflow DEPLOYS AND RUNS at
-    # all, and one attested value beats a semantically apt guess for that question. The
-    # moment START_FROM_SELECTION is harvested, this line should change.
-    start_context: START_FROM_EMPTY_SELECTION
+    # `selection_authored_entity` is the entity the task opens (Party). `condition_on_
+    # selection` is the SemQL filter that picks WHICH record — the same predicate the
+    # PartyReviewQueue collection uses (app.yaml), so the queue and the workflow agree on
+    # what "flagged" means. The emitter REFUSES START_FROM_SELECTION with no authored
+    # entity: a selection with nothing to select from is meaningless.
+    start_context: START_FROM_SELECTION
+    selection_authored_entity: Party
+    condition_on_selection: "HasSuggestedMerge = '1'"
     # The workflow admin can reassign and cancel instances. semarchyAdmin is the one
     # role this model grants; anything else would be a name with no grant behind it,
     # which IR-028 warns about precisely because the assignee then reaches a task and
     # can open nothing.
     admin_role: semarchyAdmin
+    # Retention governed by policy.retention_days (operator ruling 2026-08-08),
+    # retiring the FOREVER default that left the two KILLED probe instances in this
+    # location's history permanently. A review queue is low-volume, so it takes the
+    # base 90-day tier; a millions/day workflow would take 30. Nothing is kept forever.
+    retention:
+      retention_type: DURATION
+      duration: 90
+      time_unit: DAYS
     steps:
       # IR-028 refuses a definition with no StartEvent or no EndEvent, and refuses any
       # step with no path from one to the other. That rule came from the check the
@@ -174,7 +193,26 @@ workflows:
           # null for the same reason.
           notify_admin: true
         transitions:
-          - {to_step: done}
+          # CA-020: an unlabelled transition renders as a button named after the wire
+          # — the steward's primary action read OUTGOING on the first human-worked
+          # task (§58). The label is what the button says. The task now hands off to the
+          # SUBMIT step rather than straight to the end, so the decision persists.
+          - {to_step: submit, label: Complete review}
+
+      # THE §58 FIX. Without this step the steward's merge/split decision is authored into
+      # the workflow's dataset and then never submitted — the next INTEGRATE_DATA run
+      # certifies from the load, not from the decision, and the edit silently evaporates.
+      # A SUBMIT automation runs INTEGRATE_DATA on the authored records so the decision
+      # becomes golden. `type` goes on the wire as SUBMIT (builder label "Submit Data");
+      # `integration_job` is the job it submits to. Measured shape:
+      # harvest/workflow-hardening-constructs.json.
+      - type: Automation
+        name: submit
+        label: Persist decision
+        automation_type: SUBMIT_DATA
+        integration_job: INTEGRATE_DATA
+        transitions:
+          - {to_step: done, label: Done}
 
       - type: EndEvent
         name: done
