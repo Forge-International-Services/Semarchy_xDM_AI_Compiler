@@ -417,6 +417,65 @@ def advise(ir: IR) -> list[Gap]:
                     f"users without it see nothing at all.",
                     "docs/Design/security/model-privileges.md")
 
+    # CA-019 — a workflow whose task authors data that goes NOWHERE at completion.
+    #
+    # Measured twice on 2026-08-08 (LESSONS §58): a steward claimed the task, the
+    # stepper rendered, the form was filled, the OUTGOING transition fired, the
+    # instance completed through its end event — and no load of any type was minted.
+    # The workflow's dataset is DISCARDED at completion unless something submits it,
+    # and the IR cannot express a submit path yet (unharvested grammar), so the only
+    # honest options are: acknowledge the discard as intended (a review-only surface),
+    # or hold the workflow until the submit-path harvest lands. Both runs — one with a
+    # synthetic key, one with a real source id, one with and one without the formal
+    # Start — produced byte-identical discards, so this is a property of the
+    # DEFINITION, not of the record or the lifecycle.
+    steppers = {(s.entity, s.name): s for s in ir.app.steppers}
+    for w in m.workflows:
+        # The submit path is no longer unharvested: a SUBMIT automation
+        # (workflow-hardening-constructs.json, wire `type` SUBMIT) runs an integration
+        # job on the workflow's authored dataset, so a decision made in a task becomes
+        # golden instead of being discarded at completion. A workflow that carries one
+        # HAS a submit path, so the §58 discard cannot happen — do not ask.
+        wf_submits = any(st.type == "Automation" and st.automation_type == "SUBMIT_DATA"
+                         for st in w.steps)
+        for st in w.steps:
+            if getattr(st, "stepper", None) is None:
+                continue
+            sp = steppers.get((st.entity, st.stepper))
+            authors = sp is not None and any(x.kind == "form" for x in sp.steps)
+            has_job = sp is not None and getattr(sp, "model_job", None)
+            if authors and not has_job and not wf_submits:
+                ask("CA-019", f"workflow {w.name}/{st.name}",
+                    f"Task {st.name!r} opens stepper {st.stepper!r}, which authors "
+                    f"records — and nothing submits the workflow's dataset, so every "
+                    f"steward edit is discarded when the instance completes. Is a "
+                    f"review-only surface intended, or does this workflow need a "
+                    f"submit path (a SUBMIT automation naming an integration job)?",
+                    "Measured twice on a live instance: instance COMPLETED, no load "
+                    "minted, golden and master counts unchanged. The steward gets no "
+                    "error and no artifact — the quietest possible data loss.",
+                    "LESSONS.md §58")
+
+    # CA-020 — a user-facing transition with no label becomes a button named after
+    # the wire. The steward's primary action on the first human-worked task was a
+    # button reading OUTGOING, because `Transition.name` defaults to "outgoing" and
+    # nothing set a label (§58). Only USER_TASK outgoing transitions ask: those are
+    # the ones a human sees as buttons; system-step edges render for nobody.
+    for w in m.workflows:
+        for st in w.steps:
+            if st.type != "UserTask":
+                continue
+            for tr in st.transitions:
+                if not tr.label:
+                    ask("CA-020", f"workflow {w.name}/{st.name}",
+                        f"The transition {tr.name!r} out of task {st.name!r} has no "
+                        f"label, so the steward's action button reads "
+                        f"{tr.name.upper()!r}. What should the button say?",
+                        "The raw transition name leaks straight into the task UI as "
+                        "the primary action. Rendered exactly so on the first "
+                        "human-worked task (2026-08-08).",
+                        "LESSONS.md §58")
+
     acknowledged = set(m.acknowledged_gaps)
     return [g for g in gaps if g.key not in acknowledged and g.rule not in acknowledged]
 

@@ -942,11 +942,19 @@ def validate(ir: IR) -> list[Issue]:
                 "Transitions address steps BY NAME, so a duplicate makes every edge "
                 "pointing at it ambiguous.")
         by_name = {s.name: s for s in w.steps}
+
+        # A step's outgoing edges live in `transitions` for most types, but a Router
+        # fans out through `routes` (each carrying a SemQL condition) and NO transition.
+        # Both are name-path edges, so connectivity and dangling checks must see both.
+        def _targets(s):
+            return ([t.to_step for t in s.transitions]
+                    + [r.to_step for r in getattr(s, "routes", ())])
+
         for s in w.steps:
-            for t in s.transitions:
-                if t.to_step not in by_name:
+            for tgt in _targets(s):
+                if tgt not in by_name:
                     add("IR-028", "error", f"workflow {w.name}/{s.name}",
-                        f"transition targets {t.to_step!r}, which is not a step here",
+                        f"transition targets {tgt!r}, which is not a step here",
                         "Refs inside NGModel are name-paths and nothing resolves them "
                         "at import — a dangling edge lands in the model intact.")
 
@@ -972,13 +980,13 @@ def validate(ir: IR) -> list[Issue]:
                         stack.append(nxt)
             return seen
 
-        fwd = {s.name: [t.to_step for t in s.transitions if t.to_step in by_name]
+        fwd = {s.name: [tgt for tgt in _targets(s) if tgt in by_name]
                for s in w.steps}
         back: dict[str, list[str]] = {s.name: [] for s in w.steps}
         for s in w.steps:
-            for t in s.transitions:
-                if t.to_step in back:
-                    back[t.to_step].append(s.name)
+            for tgt in _targets(s):
+                if tgt in back:
+                    back[tgt].append(s.name)
 
         if starts:
             unreachable = set(by_name) - _walk_from([s.name for s in starts], fwd)

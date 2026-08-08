@@ -1,0 +1,140 @@
+# Scenario 2 — the dataset. Synthetic, client-agnostic, 6 masters -> 4 goldens.
+#
+# Hand-authored, because the model is two entities' worth of a handful of columns and
+# the shapes it has to exercise are nameable one record at a time. Every record proves
+# ONE thing (its `proves:` key), the same discipline as s4's dataset: a record that
+# proves nothing teaches nothing when it fails (LESSONS §3).
+#
+# WHAT THIS SCENARIO EXISTS TO EXERCISE, and which record proves it:
+#
+#   ID-MATCH on the shared CustomerNumber   — 1001 and 1002 each arrive from both CRMs
+#                                             on the same number and must MERGE to one
+#                                             golden. No matcher, no fuzzy scoring: the
+#                                             identifier is the match (certify.yaml:17).
+#   PREFERRED_PUBLISHER, CrmEu > CrmUs       — 1001/1002 FullName, Email, RegionCode
+#                                             conflict across the two CRMs; the golden
+#                                             takes CrmEu's value every time.
+#   LARGEST_VALUE on CreditLimit             — the strategy this scenario was built for
+#                                             (the first value-comparing rule in the
+#                                             corpus, certify.yaml). Proved TWICE, on
+#                                             purpose: 1001's larger limit is CrmUs's
+#                                             and 1002's is CrmEu's, so a golden that
+#                                             just followed the preferred publisher
+#                                             would get 1002 right and 1001 wrong. Only
+#                                             a value comparison gets both.
+#   LARGEST_VALUE on UpdatedAt               — "most recent wins" restated as the
+#                                             largest timestamp; a steward must not be
+#                                             able to override an audit stamp.
+#   pass-through of a single-source record   — 1003 (CrmEu only) and 1004 (CrmUs only)
+#                                             each become a golden unchanged. 1004 also
+#                                             proves a CrmUs-only value is NOT lost to
+#                                             the preferred publisher: preference only
+#                                             decides a CONFLICT, and a singleton has
+#                                             none.
+#
+# ATTRIBUTE NAMES ARE THE REST NAMES. CustomerNumber is the id attribute (the PK of an
+# ID-matched entity), carried in the record; the publisher is supplied per persist call
+# as defaultPublisherId, not in the row. Verified against s4's dataset and
+# docs/Integrate/publish-data-with-rest.md § master record for an ID-matched entity.
+#
+# TYPES ARE NOT ALL STRINGS. CreditLimit is DECIMAL and CustomerNumber is INTEGER, so
+# both are JSON numbers, not quoted — the live server rejects "90000.00" for a DECIMAL
+# attribute with "expecting DECIMAL but got [90000.00]" (measured on s4). UpdatedAt is
+# a TIMESTAMP and travels as an ISO-8601 string.
+#
+# NOT YET LOADED. s2 has no data location on the lab and there is no free datasource
+# (CLAUDE.md §4), so this dataset is offline only: it compiles the loader's payload and
+# nothing more. PREDICTIONS.md states what a run WOULD produce, so the day a datasource
+# frees the verify step has something to check against rather than being written to fit
+# whatever came back.
+
+publishers:
+  - {name: CrmEu, code: CRM_EU}
+  - {name: CrmUs, code: CRM_US}
+
+customers:
+  # ---- 1001: merges; larger CreditLimit is the NON-preferred publisher's ----
+  - group: "1001"
+    publisher: CRM_EU
+    proves: >
+      The preferred publisher (CrmEu) wins FullName, Email and RegionCode on a
+      conflict. Its CreditLimit (50000) is NOT the golden value — see the CrmUs row.
+    values:
+      CustomerNumber: 1001
+      FullName: "Isabelle Laurent"
+      Email: "isabelle.laurent@example.eu"
+      RegionCode: "EU-W"
+      CreditLimit: 50000.00
+      UpdatedAt: "2026-06-01T09:00:00Z"
+  - group: "1001"
+    publisher: CRM_US
+    proves: >
+      Same CustomerNumber as the CrmEu row -> ID-match MERGE, one golden. Its
+      CreditLimit (90000) is the LARGER, so LARGEST_VALUE takes it even though CrmEu
+      is the preferred publisher for every other attribute. Its UpdatedAt is later, so
+      it also wins the timestamp. This is the record that separates a value strategy
+      from a publisher strategy.
+    values:
+      CustomerNumber: 1001
+      FullName: "I. Laurent"
+      Email: "ilaurent@example.us"
+      RegionCode: "US-E"
+      CreditLimit: 90000.00
+      UpdatedAt: "2026-07-15T12:00:00Z"
+
+  # ---- 1002: merges; larger CreditLimit is the preferred publisher's this time ----
+  - group: "1002"
+    publisher: CRM_EU
+    proves: >
+      Mirror of 1001: here CrmEu carries BOTH the preferred-publisher win AND the
+      larger CreditLimit (120000) and the later UpdatedAt. If LARGEST_VALUE were
+      secretly following the publisher it would look correct here — which is exactly
+      why 1001 exists to refute that.
+    values:
+      CustomerNumber: 1002
+      FullName: "Marco Bianchi"
+      Email: "marco.bianchi@example.eu"
+      RegionCode: "EU-S"
+      CreditLimit: 120000.00
+      UpdatedAt: "2026-07-20T08:00:00Z"
+  - group: "1002"
+    publisher: CRM_US
+    proves: >
+      Merges into 1002. Loses every attribute: FullName/Email/RegionCode to the
+      preferred publisher, CreditLimit (80000) to the larger value, UpdatedAt to the
+      later stamp. A record that wins nothing still proves the merge happened.
+    values:
+      CustomerNumber: 1002
+      FullName: "Marco B"
+      Email: "mbianchi@example.us"
+      RegionCode: "US-W"
+      CreditLimit: 80000.00
+      UpdatedAt: "2026-05-01T08:00:00Z"
+
+  # ---- 1003 / 1004: singletons, one per CRM ----
+  - group: "1003"
+    publisher: CRM_EU
+    proves: >
+      CrmEu-only -> a golden unchanged. The pass-through case: no conflict, so no
+      strategy has anything to decide.
+    values:
+      CustomerNumber: 1003
+      FullName: "Sofia Alvarez"
+      Email: "sofia.alvarez@example.eu"
+      RegionCode: "EU-W"
+      CreditLimit: 30000.00
+      UpdatedAt: "2026-06-10T10:00:00Z"
+  - group: "1004"
+    publisher: CRM_US
+    proves: >
+      CrmUs-only -> a golden unchanged. Proves preference does NOT mean a CrmUs value
+      is discarded: preference only breaks a CONFLICT, and a single-source record has
+      none. If this golden came back empty or missing, the survivorship rule is
+      dropping non-preferred sources instead of merely deprioritizing them.
+    values:
+      CustomerNumber: 1004
+      FullName: "Derek Shaw"
+      Email: "derek.shaw@example.us"
+      RegionCode: "US-E"
+      CreditLimit: 45000.00
+      UpdatedAt: "2026-07-01T11:00:00Z"

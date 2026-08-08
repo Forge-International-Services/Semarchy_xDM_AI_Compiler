@@ -158,6 +158,37 @@ def override_strategy(*, computed: bool) -> str:
     return OVERRIDE_FORBIDDEN if computed else OVERRIDE_ALLOWED
 
 
+# ---------------------------------------------------------------- retention
+# The operator's ruling, 2026-08-08, retiring the FOREVER default that left every
+# KILLED workflow instance in the history permanently (decisions watches
+# RetentionPolicy.retention_type; FOREVER was the ungoverned answer). Retention is a
+# function of THROUGHPUT, because the cost FOREVER ignores is storage and storage
+# pressure IS volume:
+#
+#   "increasing volumes by thousands daily then retention 90 days, millions then 30"
+#
+#   >= 1,000,000 records/day   ->  30 DAYS   (millions: storage-bound, aggressive)
+#   >=     1,000 records/day   ->  90 DAYS   (thousands: the base governed tier)
+#
+# Below the thousands tier the operator carved out no third rule, so the base 90-day
+# tier applies rather than an invented longer window OR a return to FOREVER — the point
+# of the ruling is that nothing is retained forever by default. Higher volume shortens
+# retention, not lengthens it, which is the counter-intuitive-but-correct direction:
+# the more you accumulate per day, the sooner old rows have to age out.
+RETENTION_UNIT = "DAYS"
+RETENTION_TIERS = ((1_000_000, 30), (1_000, 90))   # (daily volume floor, days), descending
+RETENTION_BASE_DAYS = 90
+
+
+def retention_days(daily_volume: int | None = None) -> int:
+    """Days to retain, from expected daily throughput. `None` (volume not yet known)
+    takes the base tier — a governed default, never FOREVER."""
+    for floor, days in RETENTION_TIERS:
+        if daily_volume is not None and daily_volume >= floor:
+            return days
+    return RETENTION_BASE_DAYS
+
+
 # "Steward authored data should be more trustable." Consolidation therefore ranks
 # publishers, with the steward/manual publisher first. The REST of the ranking is
 # engagement-specific and must be asked for — this only fixes the top of the list.
