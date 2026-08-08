@@ -1,0 +1,245 @@
+# Scenario 3 — the application layer.
+#
+# Designed around ONE job: a steward works the 80-94 review band. Everything here
+# exists to serve that, and anything that does not is left out.
+#
+# The band is not decoration. Loading three records produced two goldens: SUP-1 and
+# SUP-2 auto-merged on D_EXACT_EMAIL at 100, and SUP-1/SUP-3 scored 90 on P_NAME_ZIP —
+# inside the band, so they stayed separate and a human has to decide. Without a screen
+# that suggestion accumulates where nobody sees it, which is exactly what CA-003 asks
+# about and what the operator scoped: "MVP a screen (App business view) presenting the
+# pending items for confirmation."
+
+display_cards:
+  - entity: Party
+    name: PartyDisplayCard
+    default: true
+    # The steward is comparing two records that a rule thinks are the same person.
+    # The card has to show what makes them DIFFERENT, so the identifying value is
+    # primary and the discriminators sit under it.
+    primary_text: FullName
+    secondary_text: Email
+    supporting_text: "Address.City || ', ' || Address.StateCode"
+
+collections:
+  - entity: Party
+    name: PartyCollection
+    default: true
+    description: Every golden Party.
+    display_card: PartyDisplayCard
+    columns:
+      - {name: FullName,   value: FullName,        component: semTextField, label: Name,  position: 0}
+      - {name: Email,      value: Email,           component: semTextField, label: Email, position: 1}
+      - {name: City,       value: Address.City,    component: semTextField, label: City,  position: 2}
+      - {name: State,      value: Address.StateCode, component: semTextField, label: State, position: 3}
+
+  # A SECOND collection, and the reason is the review queue itself. The steward's
+  # question is not "who is this?" but "why does the system think these two are the
+  # same, and how sure is it?". So this one leads with the evidence — the match score
+  # and how many masters are behind the golden — and the identifying columns follow.
+  # policy.STEWARD_QUEUE_FILTERS names exactly these as the queue's vocabulary.
+  - entity: Party
+    name: PartyReviewQueue
+    default: false
+    description: Parties with a suggested merge awaiting a steward decision.
+    display_card: PartyDisplayCard
+    columns:
+      - {name: FullName,     value: FullName,        component: semTextField, label: Name,     position: 0}
+      - {name: MastersCount, value: MastersCount,    component: semTextField, label: Masters,  position: 1, data_type: INTEGER}
+      - {name: Confidence,   value: ConfidenceScore, component: semTextField, label: Score,    position: 2, data_type: INTEGER}
+      - {name: Email,        value: Email,           component: semTextField, label: Email,    position: 3}
+      - {name: Zip,          value: Address.Zip5,    component: semTextField, label: Zip,      position: 4}
+
+forms:
+  - entity: Party
+    name: PartyForm
+    default: true
+    description: Party detail, split by WHO OWNS THE VALUE.
+    containers:
+      - {name: Identity, kind: tab, label: Identity, position: 0}
+      - {name: Address,  kind: tab, label: Address,  position: 1}
+      # The derived tab is a deliberate separation, not tidiness. Every attribute on it
+      # is covered by DerivedRule with override NO_OVERRIDE — the pipeline owns them and
+      # a steward edit would be silently discarded by the next certification run. Mixing
+      # them in with editable fields would invite exactly that edit.
+      - {name: MatchKeys, kind: tab, label: Match keys (derived), position: 2}
+    fields:
+      - {name: FullName,  value: FullName,  component: semTextField, container: Identity, label: Full name, position: 0}
+      - {name: Email,     value: Email,     component: semTextField, container: Identity, label: Email,     position: 1}
+      - {name: SourceKey, value: SourceKey, component: semTextField, container: Identity, label: Source key, position: 2}
+      - {name: Street,    value: Address.Street,    component: semTextField, container: Address, label: Street,   position: 0}
+      - {name: City,      value: Address.City,      component: semTextField, container: Address, label: City,     position: 1}
+      - {name: StateCode, value: Address.StateCode, component: semTextField, container: Address, label: State,    position: 2}
+      - {name: Zip5,      value: Address.Zip5,      component: semTextField, container: Address, label: Zip,      position: 3}
+      - {name: NormalizedName,    value: NormalizedName,    component: semTextField, container: MatchKeys, label: Normalized name,  position: 0}
+      - {name: NormalizedEmail,   value: NormalizedEmail,   component: semTextField, container: MatchKeys, label: Normalized email, position: 1}
+      - {name: PhoneticNameToken, value: PhoneticNameToken, component: semTextField, container: MatchKeys, label: Phonetic token,   position: 2}
+
+# A stepper exists here for exactly one reason: a workflow UserTask opens one, and a
+# UserTask with a null stepper imports at 204 and then makes the whole model
+# UNEXPORTABLE — the re-export dies mid-document and leaves XML that will not parse
+# (measured on the lab 2026-08-06, and now refused by emit_workflow). So the stepper is
+# a PREREQUISITE of ReviewQueue in model.yaml, not a screen someone asked for.
+#
+# LESSONS §45: steppers are the ONLY enrichment path for authored records on a matched
+# entity. That is not what this one is doing yet — it is a single form step over the
+# existing PartyForm, the minimum that gives the task something real to open. Party
+# records arrive from three publishers through INTEGRATE_DATA and this scenario has
+# deliberately made no authoring decision (see the missing CreateAction below), so the
+# stepper stays a viewing surface until that decision is made.
+#
+# A FormStep opens ONE TAB of a form, not a whole form, and it hangs off a root
+# COLLECTION step. Both facts were measured across every Stepper in the corpus after the
+# first version of this stepper — a bare form step, no root, every ref null — imported at
+# 204, exported cleanly, and killed the deploy (§50):
+#
+#     Stepper.rootCollectionStep          ref 20/20, never null
+#     FormStep.formTab -> a FormTab       ref 26/26, never null
+#     FormStep.parentCollectionStep       ref 26/26, never null
+#     steppers with no CollectionStep       0/20
+#
+# Only the two DESIGN decisions are written here — which collection the steward lands in
+# and which tab they edit. The root collection step itself is derived by the emitter,
+# because "a stepper cannot be a bare form" is the product's plumbing and not something
+# an author should have to know.
+steppers:
+  - entity: Party
+    name: AuthorParty
+    label: Author Party
+    # PartyCollection, not PartyReviewQueue. The queue is filtered to records with a
+    # suggested merge and leads with the score; someone opening a task to EDIT a party
+    # wants the plain list. The review queue is where the task is FOUND — that is
+    # `my_tasks_collection` on the workflow, and it is deliberately a different one.
+    collection: PartyCollection
+    # No model_job. The dups manager re-certifies on finish because a merge changes
+    # which masters back the golden; a stepper that only shows a form changes nothing,
+    # and running INTEGRATE_DATA from it would be a job with no cause.
+    steps:
+      # Identity only. The Address tab is editable too and could be a second step, but
+      # MatchKeys must never be one — every attribute on it is NO_OVERRIDE and a steward
+      # edit there is discarded by the next certification run.
+      - {kind: form, name: Identity, label: Party detail, position: 0,
+         form: PartyForm, form_tab: Identity}
+
+dups_managers:
+  - entity: Party
+    name: ReviewParty
+    label: Review suggested Party merges
+    description: The steward queue for the 80-94 band.
+    collection: PartyReviewQueue
+    table_collection: PartyCollection
+    display_card: PartyDisplayCard
+    form: PartyForm
+    form_tab: Identity
+    # Re-certify on finish. A merge changes which masters back the golden, so the
+    # consolidation and survivorship have to run again — otherwise the record the
+    # steward just approved keeps the values from before the merge.
+    model_job: INTEGRATE_DATA
+    settings:
+      # policy.MASTER_VALUE_PICKING. The operator: "the users will like to choose which
+      # data to survive, so they should be able to select from matching records". It is
+      # also the product's own default, which is a good sign the requirement is normal.
+      enableMasterValuePicking: "true"
+
+action_sets:
+  - entity: Party
+    name: PartyActions
+    label: Party actions
+    default: true
+    actions:
+      - {kind: ReviewAndConfirm, name: ReviewMerges, label: Review suggested merges,
+         position: 0, dups_manager: ReviewParty}
+      - {kind: MergeOrSplit, name: MergeOrSplit, label: Merge or split,
+         position: 1, dups_manager: ReviewParty}
+      - {kind: ExportAction, name: Export, label: Export, position: 2}
+      # No CreateAction and no DeleteAction. Party records arrive from three publishers
+      # through INTEGRATE_DATA; a record typed straight into the hub would have no
+      # publisher behind it and no source to reconcile against. Authoring is a
+      # different design decision from stewarding, and this scenario has not made it.
+
+business_views:
+  - entity: Party
+    name: PartySteward
+    label: Party stewardship
+    root: PartyNode
+    root_label: Party
+    root_plural_label: Parties
+    description: The review queue — Parties a rule has flagged but nobody has judged.
+    # The filter IS the queue. corpus model A does the same thing on OrganizationStewardView.
+    # Without it the steward opens a list of every Party and has to find the two that
+    # need them, which is how a queue stops being used.
+    filter: "HasSuggestedMerge = '1'"
+    nodes:
+      - name: PartyNode
+        entity: Party
+        collection: PartyReviewQueue
+        form: PartyForm
+        action_set: PartyActions
+        display_card: PartyDisplayCard
+        # FullName, not ConfidenceScore DESC. "Highest score first" was the design
+        # intent, but the node-sort SemQL scope resolves model attributes, roles and
+        # audit columns only — no matching built-ins. Named by the Validation view on
+        # s4's sibling node (2026-08-08); this edition deployed and rendered before
+        # anyone ran that view on it, which is how the defect stayed latent. The
+        # score still leads visually as PartyReviewQueue's third column. IR-035
+        # refuses the built-ins here now.
+        sort_expression: FullName
+
+  - entity: Party
+    name: PartyBrowse
+    label: All parties
+    root: AllParties
+    root_label: Party
+    root_plural_label: Parties
+    description: Unfiltered golden data, for looking something up rather than judging it.
+    nodes:
+      - name: AllParties
+        entity: Party
+        collection: PartyCollection
+        form: PartyForm
+        action_set: PartyActions
+        display_card: PartyDisplayCard
+        sort_expression: FullName
+
+applications:
+  - name: PartyHub
+    label: Party Hub
+    title: Party Hub
+    description: Master party data across Support, Marketing and Events.
+    default_action: OpenReviewQueue
+    actions:
+      # EXACTLY ONE root folder, with no parent, and everything hangs from it. The
+      # deployer refuses "Missing root folder for: PartyHub" otherwise — and the import
+      # accepts it happily. Every application in the corpus has this shape.
+      - {kind: FolderAction, name: Root, label: Root Folder, position: 0}
+      - {kind: FolderAction, name: Stewardship, label: Stewardship, position: 0,
+         parent_folder: Root}
+      - {kind: BrowseBusinessViewAction, name: OpenReviewQueue,
+         label: Review queue, position: 0, parent_folder: Stewardship,
+         view_entity: Party, view: PartySteward,
+         # GD: the queue judges GOLDEN records. MD would show the masters behind them,
+         # which is what the dups manager opens INTO, not what the queue lists.
+         settings: {viewType: GD}}
+      - {kind: BrowseBusinessViewAction, name: OpenAllParties,
+         label: All parties, position: 1, parent_folder: Stewardship,
+         view_entity: Party, view: PartyBrowse, settings: {viewType: GD}}
+      # Errors are a different queue with a different reader. A record rejected by
+      # PlausibleZip or NameOrEmailPresent is not a merge decision — it is a data
+      # problem for whoever owns the source, and it must not be invisible.
+      - {kind: BrowseBusinessViewAction, name: OpenRejected,
+         label: Rejected records, position: 2, parent_folder: Stewardship,
+         view_entity: Party, view: PartyBrowse,
+         settings: {viewType: SDWE}}
+      - {kind: GlobalSearchAction, name: GlobalSearch, label: Search, position: 1,
+         parent_folder: Root}
+      - {kind: MyTasksAction, name: MyTasks, label: My tasks, position: 2,
+         parent_folder: Root}
+    navigation:
+      - kind: group
+        name: Main
+        label: Party Hub
+        position: 0
+        items:
+          - {action: Stewardship, position: 0}
+          - {action: GlobalSearch, position: 1}
+          - {action: MyTasks, position: 2}

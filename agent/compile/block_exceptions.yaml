@@ -1,0 +1,12 @@
+# Elements accepted by blocks.check despite NO export containing them.
+#
+# This is the escape hatch for "the documentation describes it, no sample uses it".
+# It is a RECORDED DECISION, not a severity flag: an entry must name the element, say
+# why it is legitimate, and cite the page that attests it. A future session can then
+# argue with the reasoning instead of discovering a silenced check.
+#
+# Prefer TEACHING THE LIBRARY (build it once, export, re-harvest) over adding an entry
+# here. Every unknown raised so far — PKAttribute.LOVValidationScope,
+# PKAttribute.mandatoryValidationScope, LOVValue.posInParent — was a real invention,
+# so the bar for an entry is high.
+accepted: []

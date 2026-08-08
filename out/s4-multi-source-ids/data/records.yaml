@@ -1,0 +1,196 @@
+# Scenario 4 — the dataset. Synthetic, client-agnostic, 8 masters + 4 opportunities.
+#
+# Every record here exists to prove ONE thing, and the thing it proves is named in its
+# `proves:` key. A record that proves nothing is a record whose failure teaches nothing
+# (LESSONS §3), so there are none.
+#
+# ATTRIBUTE NAMES ARE THE REST NAMES, not the physical column names. The wire uses the
+# logical attribute name; `FS_CUSTOMER` / `FP_CUSTOMER` are what the SD_ table calls the
+# same thing when you load it over SQL. Verified against docs/SemQL/entity-attributes.md
+# § Foreign attributes:
+#
+#     SourceID_<ForeignAttribute>    the referenced MASTER record's source id
+#     PublisherID_<ForeignAttribute> the referenced master record's publisher CODE
+#     FID_<ForeignAttribute>         the referenced GOLDEN id — OUTPUT of consolidation,
+#                                    never loaded
+#
+# <ForeignAttribute> is the reference's toRoleName, read off the deployed model rather
+# than assumed: `Customer` for OpportunityCustomer, `Parent` for CustomerParent.
+#
+# RAW VALUES ARE DELIBERATELY MESSY. Lowercase keys, mixed-case state codes and ZIP+4
+# in Address.Zip are the inputs the enrichers must normalize. The publisher's value has
+# to still be there afterwards — that is §47, and it is the reason ErpKeyNorm/Zip5 are
+# separate attributes rather than in-place rewrites.
+#
+# TYPES ARE NOT ALL STRINGS, whatever the OpenAPI spec says. The spec models a record as
+#     Persistable_Entity_: { additionalProperties: { type: string } }
+# and `"Amount": "25000.00"` is rejected by the live server with
+#     Invalid value for Amount: expecting DECIMAL but got [25000.00]
+# So a DECIMAL attribute must be a JSON NUMBER. The spec's open string map is a
+# description of the KEYS, not of the values; the only place the value contract exists
+# is the wire. Found by the dry run (2026-08-07, load 132) rather than by the submit,
+# which is the whole reason the dry run is a separate subcommand.
+
+publishers:
+  Sfdc: SFDC
+  Erp: ERP
+  Billing: BILLING
+
+# ---------------------------------------------------------------------------
+customers:
+
+  # --- A: two publishers, same ERP key, differing in CASE only after trim. -----
+  - group: A
+    publisher: SFDC
+    proves: >
+      D_ERP_KEY fires at 100 on the NORMALIZED key when the raw keys differ in case.
+      Matching on the raw ErpKey would not have matched these two at all.
+    values:
+      SourceID: SFDC-1001
+      Name: Northwind Trading Co
+      SfdcKey: 0015g00000AbCdE
+      ErpKey: erp-4410
+      Address.StateCode: wa
+      Address.Zip: 98101-4471
+
+  - group: A
+    publisher: ERP
+    proves: >
+      The ERP side of the same company. Erp outranks Sfdc in every survivorship rule,
+      so this record's Name and Address are the ones expected on the golden.
+    values:
+      SourceID: ERP-7001
+      Name: Northwind Trading Company
+      ErpKey: ERP-4410
+      Address.StateCode: WA
+      Address.Zip: '98101'
+
+  # --- B: billing key merge, and the ZIP+4 that must survive on the GOLDEN. ----
+  - group: B
+    publisher: SFDC
+    proves: D_BILLING_KEY fires at 100 on BillingKeyNorm across two publishers.
+    values:
+      SourceID: SFDC-1002
+      Name: Cascade Logistics LLC
+      SfdcKey: 0015g00000FgHiJ
+      BillingKey: bill-88231
+      Address.StateCode: or
+      Address.Zip: '97205'
+
+  - group: B
+    publisher: BILLING
+    proves: >
+      Billing outranks Erp and Sfdc in AddressRule, so THIS address wins the golden —
+      which puts a ZIP+4 on a golden record. §47 is then readable without opening a
+      master: Address.Zip keeps 97205-1122 while Address.Zip5 derives 97205.
+    values:
+      SourceID: BILL-3001
+      Name: Cascade Logistics
+      BillingKey: BILL-88231
+      Address.StateCode: OR
+      Address.Zip: 97205-1122
+
+  # --- C: the review band. No shared keys at all. -----------------------------
+  - group: C
+    publisher: SFDC
+    proves: >
+      With ErpKeyNorm and BillingKeyNorm both null, neither deterministic rule can
+      fire — NULL = NULL is UNKNOWN, not true — so only P_NAME_STATE_ZIP is left.
+    values:
+      SourceID: SFDC-1003
+      Name: Rainier Medical Group
+      SfdcKey: 0015g00000KlMnO
+      Address.StateCode: WA
+      Address.Zip: '98004'
+
+  - group: C
+    publisher: ERP
+    proves: >
+      Same normalized name, state and Zip5; different raw case and a ZIP+4. Scores 88,
+      which is inside [80, 95) — the REVIEW band. The pair must become a SUGGESTION and
+      must NOT merge. If these two come back as one golden, the auto-merge threshold is
+      not doing what policy says it does.
+    values:
+      SourceID: ERP-7002
+      Name: rainier medical group
+      Address.StateCode: wa
+      Address.Zip: 98004-0099
+
+  # --- D: the singleton control. ----------------------------------------------
+  - group: D
+    publisher: ERP
+    proves: >
+      The control. Carries BOTH deterministic keys, and neither has a partner, so both
+      rules run and neither fires. A rule that matched this record would be a rule
+      matching on something other than what its condition says.
+    values:
+      SourceID: ERP-7003
+      Name: Sound Fabrication Inc
+      ErpKey: ERP-9990
+      BillingKey: BILL-55555
+      Address.StateCode: WA
+      Address.Zip: 98188-2231
+
+  # --- E: the self-reference, pointed at a master that MERGES. ----------------
+  - group: E
+    publisher: SFDC
+    proves: >
+      CustomerParent, loaded as (PublisherID_Parent, SourceID_Parent) because Customer
+      is fuzzy. It points at ERP-7001, a master that is itself consolidated into group
+      A's golden — so FID_Parent is only correct if the reference is resolved AFTER
+      Customer consolidates. That ordering is the whole reason the reference is
+      POST_CONSO. ErpKey is 4411, one digit off A's 4410, so this record does not merge.
+    values:
+      SourceID: SFDC-1004
+      Name: Northwind Trading West
+      SfdcKey: 0015g00000PqRsT
+      ErpKey: ERP-4411
+      Address.StateCode: WA
+      Address.Zip: '98101'
+      PublisherID_Parent: ERP
+      SourceID_Parent: ERP-7001
+
+# ---------------------------------------------------------------------------
+# Opportunity is BASIC: no publisher, no master records, loaded straight into GD.
+# The reference to Customer is still FP_/FS_-shaped, because the shape is decided by
+# the entity being REFERENCED, not by the entity doing the referencing.
+opportunities:
+
+  - proves: >
+      Points at ERP-7001, the SURVIVING side of group A. The easy direction.
+    values:
+      OpportunityId: OPP-001
+      Name: Q3 Renewal
+      Amount: 25000.00
+      PublisherID_Customer: ERP
+      SourceID_Customer: ERP-7001
+
+  - proves: >
+      Points at SFDC-1002, the side of group B whose publisher is ranked LAST. Its
+      master is consolidated into a golden whose values came from Billing, so this FK
+      has to resolve through the merge rather than to the record it names.
+    values:
+      OpportunityId: OPP-002
+      Name: Fleet Expansion
+      Amount: 118500.50
+      PublisherID_Customer: SFDC
+      SourceID_Customer: SFDC-1002
+
+  - proves: >
+      Points at SFDC-1003, half of the UNMERGED review-band pair. Resolves to that
+      master's own golden — a suggestion is not a merge, and the FK must not behave as
+      if it were.
+    values:
+      OpportunityId: OPP-003
+      Name: Pilot Program
+      Amount: 4200.00
+      PublisherID_Customer: SFDC
+      SourceID_Customer: SFDC-1003
+
+  - proves: The singleton's opportunity. One master, one golden, one FK.
+    values:
+      OpportunityId: OPP-004
+      Name: Facilities Retrofit
+      Amount: 76000.00
+      PublisherID_Customer: ERP
+      SourceID_Customer: ERP-7003

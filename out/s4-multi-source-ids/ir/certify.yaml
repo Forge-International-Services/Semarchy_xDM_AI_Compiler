@@ -1,0 +1,208 @@
+enrichers:
+  - entity: Customer
+    name: NormalizeName
+    kind: semql
+    scope: PRE_CONSO
+    expressions:
+      - {attribute: NormalizedName, expression: "UPPER(TRIM(Name))"}
+  # RENAMED from PopulateErpKey 2026-08-03, because it never populated anything and
+  # could not have. Its expression was COALESCE(ErpKey, TRIM(ErpKey)) — a tautology
+  # that returns ErpKey when non-null and null otherwise.
+  #
+  # The deeper error was the name. Getting ERP's key out of SFDC's ERP_ID__C and
+  # Billing's ERP_REF is a PUBLISH-TIME mapping from a source column to an attribute,
+  # done by each publisher's integration load. An enricher runs on the master record
+  # AFTER it lands, so by then the value is either there or it never will be.
+  #
+  # What an enricher can legitimately do is make the carried keys comparable, which is
+  # what the deterministic rules and their binning actually need.
+  #
+  # Writes into ErpKeyNorm / BillingKeyNorm rather than back over their inputs. It used
+  # to do the latter, which destroyed the publisher's value on the first load — LESSONS
+  # §47, and now CA-018.
+  - entity: Customer
+    name: NormalizeCarriedKeys
+    kind: semql
+    scope: PRE_CONSO
+    expressions:
+      - {attribute: ErpKeyNorm, expression: "UPPER(TRIM(ErpKey))"}
+      - {attribute: BillingKeyNorm, expression: "UPPER(TRIM(BillingKey))"}
+  # Feeds the binning key of P_NAME_STATE_ZIP. Promised by 02-certification.md and
+  # absent from the IR until 2026-08-03 — see CA-013.
+  - entity: Customer
+    name: NormalizeAddress
+    kind: semql
+    scope: PRE_CONSO
+    expressions:
+      - {attribute: Address.StateCodeNorm, expression: "UPPER(TRIM(Address.StateCode))"}
+      # Reads Address.Zip (the raw inbound, up to ZIP+4) and writes Address.Zip5. The
+      # previous version read and wrote Zip5, so the +4 was destroyed on the first load
+      # and could never be recovered — §47's "vendor-shaped value in an attribute the
+      # source never sent that way".
+      - {attribute: Address.Zip5, expression: "SUBSTR(REGEXP_REPLACE(TRIM(Address.Zip), '[^0-9]', ''), 1, 5)"}
+
+validations:
+  - {entity: Customer, name: SourceKeyPresent, scope: PRE_CONSO,
+     condition: "Name IS NOT NULL"}
+  - {entity: Customer, name: PlausibleErpKey, scope: PRE_CONSO,
+     condition: "ErpKey IS NULL OR LENGTH(TRIM(ErpKey)) BETWEEN 4 AND 40"}
+  # Nothing in a self-reference prevents A -> B -> A.
+  # `Parent IS NULL` was invalid and nothing said so for four days. `Parent` is a
+  # reference ROLE — a TO_ONE_PATH — and SemQL requires a SCALAR on both sides of IS
+  # NULL. The product's own sentence, from the job generator on 2026-08-07:
+  #     'Parent' is not valid here: Expression must be of type SCALAR but is of
+  #     type TO_ONE_PATH
+  # Only the FIRST term was wrong; `Parent.CustomerGoldenId` was always a legal
+  # traversal. Refused offline by IR-032 as of this change.
+  - {entity: Customer, name: NoSelfParent, scope: POST_CONSO,
+     condition: "Parent.CustomerGoldenId IS NULL OR Parent.CustomerGoldenId <> CustomerGoldenId"}
+  - {entity: Opportunity, name: OpportunityNamed, scope: PRE_CONSO,
+     condition: "Name IS NOT NULL"}
+
+matchers:
+  - entity: Customer
+    policy: {auto_merge_at: 95, review_from: 80}
+    rules:
+      # Deterministic rules match on the NORMALIZED keys, so that a difference of case
+      # or whitespace between two publishers does not defeat an exact-equality rule.
+      # Matching on the raw key would have been a rule that mostly did not fire.
+      - name: D_ERP_KEY
+        score: 100
+        condition: "Record1.ErpKeyNorm = Record2.ErpKeyNorm"
+        binning: ["ErpKeyNorm"]
+      - name: D_BILLING_KEY
+        score: 100
+        condition: "Record1.BillingKeyNorm = Record2.BillingKeyNorm"
+        binning: ["BillingKeyNorm"]
+      # BINNING IS THE COST CONTROL, and it was set to the least selective attribute in
+      # the model. `Address.StateCode` has ~50 distinct values, so every record in a
+      # state was a candidate pair for every other — quadratic inside the bin, and the
+      # bin is a US state.
+      #
+      # LESSONS §46: an over-matched group does not render slowly, it returns 504 on the
+      # duplicate manager's data call, and the group is the TRANSITIVE CLOSURE of the
+      # match graph rather than the bin. A 904-master group there came out of a city
+      # holding 18 masters, chained through 60 name tokens. Selectivity in the bin is
+      # what stops the chain from starting.
+      #
+      # Binning on the normalized name AND the state matches the rule's own condition,
+      # which is the invariant worth keeping: a bin must not be coarser than the
+      # equality the rule tests, or the bin is doing no work.
+      #
+      # The name also lied — it claimed ZIP and the condition never mentioned one. Zip5
+      # is now in the condition, which is what the name promised and what makes the rule
+      # discriminating enough to score 88.
+      - name: P_NAME_STATE_ZIP
+        score: 88
+        condition: "Record1.NormalizedName = Record2.NormalizedName AND Record1.Address.StateCodeNorm = Record2.Address.StateCodeNorm AND Record1.Address.Zip5 = Record2.Address.Zip5"
+        binning: ["NormalizedName", "Address.StateCodeNorm"]
+
+survivorship:
+  # The Master ID rule: which matched master record's ID becomes the golden ID.
+  # Mandatory on every matched entity — without it the deploy dies in
+  # Entity.getIdSurvivorshipRule. Takes rankings, no attributes, no override.
+  - entity: Customer
+    name: MasterIdRule
+    kind: id
+    strategy: PREFERRED_PUBLISHER
+    attributes: []
+    publisher_rankings: [Erp, Billing, Sfdc]
+  - entity: Customer
+    name: NameRule                      # publisher-supplied; a steward may correct it
+    strategy: PREFERRED_PUBLISHER
+    attributes: [Name]
+    publisher_rankings: [Erp, Billing, Sfdc]
+    override_strategy: UNTIL_NEXT_USER_CHANGE
+  # Enricher output — the pipeline owns it. A rule carries ONE override strategy, so
+  # this cannot share NameRule. House policy, agent/ir/policy.py § survivorship.
+  - entity: Customer
+    name: DerivedRule
+    strategy: PREFERRED_PUBLISHER
+    # Every attribute an enricher writes belongs here, not merely NormalizedName.
+    # Adding the normalized keys to CrossRefRule instead put pipeline output under
+    # UNTIL_NEXT_USER_CHANGE, where a steward edit survives until the next enricher run
+    # silently reverts it. CA-012 caught that within a minute of the change.
+    attributes: [NormalizedName, ErpKeyNorm, BillingKeyNorm]
+    publisher_rankings: [Erp, Billing, Sfdc]
+    override_strategy: NO_OVERRIDE
+  # MEMBER-LEVEL, not the bare complex attribute. `Address` has no physical column of
+  # its own — only its four definition attributes do — so a survivorship scope naming it
+  # resolves to zero columns of the SF (source flags) table, and the deploy dies
+  # interpreting "Merge (update) source override values into GA table.sql" with
+  #     One or more expression should be provided to least().
+  # samples/corpus-a-org-mdm-0.1.xml's AddressRule names all eight of its members
+  # individually; so does s3's DefaultRule. Nothing in the corpus scopes a rule to a
+  # bare complex attribute. IR-031.
+  - entity: Customer
+    name: AddressRule
+    strategy: PREFERRED_PUBLISHER
+    attributes: [Address.StateCode, Address.Zip, Address.StateCodeNorm, Address.Zip5]
+    publisher_rankings: [Billing, Erp, Sfdc]
+  # Cross-references consolidate like any attribute: if two publishers disagree about
+  # ERP's key for the same company, one wins and the golden cross-reference silently
+  # points at the wrong ERP row. Ranking makes that deterministic.
+  - entity: Customer
+    name: CrossRefRule
+    strategy: PREFERRED_PUBLISHER
+    attributes: [ErpKey, BillingKey, SfdcKey]
+    publisher_rankings: [Erp, Billing, Sfdc]
+  # The catch-all, in the shape the corpus actually attests. EVERY working matched
+  # entity measured — corpus model A's Organization, s3's Party — carries exactly one rule
+  # with defaultRule true, and corpus model A's carries an EMPTY scope: the flag means "every
+  # attribute no other rule claims", so listing attributes as well is a hybrid nothing
+  # writes. s4 had no default rule at all, and Customer's `Parent` foreign attribute was
+  # claimed by nothing.
+  - entity: Customer
+    name: DefaultRule
+    default_rule: true
+    strategy: PREFERRED_PUBLISHER
+    attributes: []
+    publisher_rankings: [Erp, Billing, Sfdc]
+    override_strategy: UNTIL_NEXT_USER_CHANGE
+
+# The integration job — the executable half of everything above, and the thing s4 was
+# missing on 2026-08-07 when it tried to become RUNNABLE.
+#
+# The model imported at 204, deployed, sat at DL_READY, accepted eight Customer masters
+# and four Opportunity rows through PERSIST_DATA and echoed every enricher's output
+# correctly. Then:
+#
+#     HTTP 400  Cannot submit load [134] with job [INTEGRATE_DATA] and user [...]
+#               Job [INTEGRATE_DATA] does not exist. Known jobs are []
+#
+# Scenario 3 hit the identical wall three days earlier and fixed it in ITS certify.yaml,
+# which is exactly how s1, s2 and s4 were each left free to rediscover it. It is now
+# IR-030 and refuses offline.
+#
+# ORDER IS NOT COSMETIC HERE. Customer is position 1 and Opportunity position 2 because
+# OpportunityCustomer is a PRE_CONSO reference: the child's foreign key is resolved
+# against the parent's certified records, so the parent's task has to have run. This is
+# not inferred — samples/gs-productretail-2025.1.0.xml orders its seven tasks
+# Family, SubFamily, Brand, Size, Product, Item, ItemImage, strictly parents first.
+# CustomerParent is a self-reference and needs no second task; that is why it is
+# POST_CONSO instead.
+#
+# All six flags true on both tasks, because that is what every ModelJobTask in the
+# corpus does — including on BASIC entities, which is what Opportunity is.
+jobs:
+  - name: INTEGRATE_DATA
+    job_type: INTEGRATION
+    queue: Default
+    description: Load and certify Customer, then Opportunity, from all three publishers.
+    tasks:
+      - entity: Customer
+        position: 1
+        source_validation: true
+        source_enrichment: true
+        match: true
+        consolidation: true
+        consolidated_enrichment: true
+        post_conso_validation: true
+      - entity: Opportunity
+        position: 2
+        source_validation: true
+        source_enrichment: true
+        match: true
+        consolidation: true
+        consolidated_enrichment: true
+        post_conso_validation: true

@@ -1,0 +1,109 @@
+# The dependency manifest, derived by measurement rather than by memory.
+#
+# Every name below was found by walking the AST of every .py file under agent/,
+# scripts/, search/ and tests/ and subtracting the standard library — plus one
+# that no import statement mentions: BeautifulSoup selects its parser by STRING
+# ("lxml", scripts/fetch_docs.py:145,255), so lxml is a hard runtime dependency
+# that `import lxml` never appears for. That is the same class of hazard the
+# rest of this repo is about: absence from the obvious place is not absence.
+#
+# Lower bounds are the versions actually installed in the .venv the 526-test
+# suite passes on. They are floors, not pins — nothing here has been tested
+# below them, and the bound records that rather than guessing compatibility.
+#
+# No console scripts. The documented entry points are module invocations and
+# they are what CLAUDE.md and the README say:
+#     python -m agent.build <env> <ir-dir>
+#     python -m agent.rest  <env>
+#     python -m agent.watch <env> <model>
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "semarchy-xdm-agent"
+version = "0.1.0"
+description = "Natural-language MDM requirements to a working Semarchy xDM application: NL -> YAML IR -> metaDataExport XML -> import -> deploy -> run."
+readme = "README.md"
+# The measured floor. 3.13.5 is what the suite is green on; earlier versions are
+# unverified, and this repo does not report unverified as verified.
+requires-python = ">=3.13"
+
+# The core: what `import agent.*` needs, and nothing else.
+#   pydantic  agent/ir/schema.py, agent/ir/decisions.py   -- the IR itself
+#   pyyaml    12 modules; every .yaml the compiler reads (blocks.yaml,
+#             component_vocab.yaml, block_exceptions.yaml, the IR files)
+#   sqlglot   agent/tools/semql.py, agent/tools/schema_ingest.py -- SemQL and DDL
+#   requests  scripts/fetch_docs.py
+#   bs4+lxml  scripts/fetch_docs.py
+#
+# fetch_docs' three are core rather than optional ON PURPOSE: the export pack
+# ships without the documentation corpus, and fetch_docs.py is the documented
+# way back. A way back that needs a second `pip install` before it runs is not
+# a way back the recipient will find.
+dependencies = [
+    "pydantic>=2.13.4",
+    "pyyaml>=6.0.3",
+    "sqlglot>=30.14.0",
+    "requests>=2.34.2",
+    "beautifulsoup4>=4.15.0",
+    "lxml>=6.1.1",
+]
+
+[project.optional-dependencies]
+# Dense retrieval over the corpus (agent/rag.py, and agent/tools/knowledge.py
+# through it). Both imports are LAZY -- inside _connect() and _encode() -- so
+# `import agent.rag` succeeds without these and only search() needs them.
+# pgvector is a POSTGRES EXTENSION here, not a Python package: rag.py issues
+# `CREATE EXTENSION vector` and passes vectors as SQL literals.
+rag = [
+    "psycopg[binary]>=3.3.4",
+    "sentence-transformers>=5.6.1",
+]
+
+# Rebuilding the corpus from source media. Only needed if you are re-mirroring
+# the Academy material, not to run the compiler.
+#   pdfplumber   scripts/extract_slides.py   (NOT installed in the reference
+#                venv, so it carries no measured floor -- unverified)
+#   mlx-whisper  scripts/transcribe.py, first of three backends it tries; it
+#                already degrades to faster-whisper then openai-whisper with an
+#                install hint, so pick whichever suits the machine.
+corpus = [
+    "pdfplumber",
+    "mlx-whisper>=0.4.3 ; sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
+
+dev = ["pytest>=9.1.1"]
+
+[tool.setuptools]
+# Explicit, because this is a flat layout with a dozen non-package directories
+# (docs/, out/, live/, samples/, harvest/, roadmap/ ...) that auto-discovery
+# would either grab or choke on.
+packages = [
+    "agent",
+    "agent.browser",
+    "agent.compile",
+    "agent.ir",
+    "agent.knowledge",
+    "agent.tools",
+]
+
+[tool.setuptools.package-data]
+# blocks.yaml, component_vocab.yaml, block_exceptions.yaml, the IR examples and
+# the phase prompts. All are read through Path(__file__), so an installed copy
+# without them is a package that imports and then cannot compile anything.
+agent = ["**/*.yaml", "**/*.md"]
+
+[tool.setuptools.exclude-package-data]
+# knowledge/gaps.yaml is the ONE yaml under agent/ that is mutable state rather than
+# a harvested library. A wheel shipping someone else's gap ledger — writable only in
+# site-packages — is a bug, so the glob above must not sweep it up.
+agent = ["knowledge/gaps.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# The repo root has to be importable for `import agent` and for the tests that
+# read out/, live/ and samples/ relative to it. `python -m pytest` puts cwd on
+# sys.path; a bare `pytest` does not, and this makes both work.
+pythonpath = ["."]

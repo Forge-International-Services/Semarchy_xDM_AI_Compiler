@@ -1,0 +1,115 @@
+[
+  {
+    "_note": "OPEN, never submitted. A UI session that created a load and walked away. No batchId, no integrationJob, numberOfJobExecutions 0, still submittable. 48 of these were present on a live hub and did NOT prevent a model edition change.",
+    "loadId": 119,
+    "loadStatus": "RUNNING",
+    "loadCreator": "user.a",
+    "loadCreationDate": "2026-08-05T23:44:03.215Z",
+    "numberOfJobExecutions": 0,
+    "submitInterval": -1,
+    "submittable": true,
+    "loadType": "DIRECT_DUPS_MANAGEMENT"
+  },
+  {
+    "_note": "OPEN, never submitted, different type. Same story.",
+    "loadId": 102,
+    "loadStatus": "RUNNING",
+    "loadCreator": "user.b",
+    "loadCreationDate": "2026-08-05T15:43:03.911Z",
+    "numberOfJobExecutions": 0,
+    "submitInterval": -1,
+    "submittable": true,
+    "loadType": "DIRECT_AUTHORING"
+  },
+  {
+    "_note": "SUBMITTED and FAILED. Has a batchId and an integrationJob with a startDate and NO completionDate. This is the one a preflight has to speak about.",
+    "loadId": 108,
+    "loadStatus": "ERROR",
+    "loadCreator": "user.a",
+    "loadCreationDate": "2026-08-05T16:53:02.465Z",
+    "loadSubmitDate": "2026-08-05T16:53:22.802Z",
+    "batchSubmitter": "user.a",
+    "batchId": 34,
+    "integrationJobName": "LOAD_ENTITYA",
+    "integrationJobQueueName": "Default",
+    "integrationJob": {
+      "startDate": "2026-08-05T16:56:48.754Z",
+      "duration": 25203832,
+      "errorMessage": "<TRIMMED> SQL compilation error: Unknown functions UDF_PHONETIC",
+      "currentTask": {
+        "name": "ENR_PHONETIC_TOKEN (SemQL)",
+        "startDate": "2026-08-05T17:27:07.639Z",
+        "duration": 23384947
+      },
+      "notificationStatus": "PENDING"
+    },
+    "numberOfJobExecutions": 2,
+    "submitInterval": -1,
+    "submittable": true,
+    "loadType": "DIRECT_AUTHORING"
+  },
+  {
+    "_note": "SUBMITTED and FINISHED. integrationJob carries a completionDate. Terminal.",
+    "loadId": 66,
+    "loadStatus": "WARNING",
+    "loadCreator": "user.a",
+    "loadCreationDate": "2026-08-03T15:19:19.404Z",
+    "loadSubmitDate": "2026-08-03T15:19:57.331Z",
+    "batchSubmitter": "user.a",
+    "batchId": 33,
+    "integrationJobName": "LOAD_ENTITYA",
+    "integrationJobQueueName": "Default",
+    "integrationJob": {
+      "startDate": "2026-08-03T15:19:58.534Z",
+      "completionDate": "2026-08-03T15:25:58.453Z",
+      "duration": 359919,
+      "currentTask": {
+        "name": "Insert new MH for modified MD records",
+        "startDate": "2026-08-03T15:25:57.518Z",
+        "duration": 935
+      },
+      "notificationStatus": "PENDING"
+    },
+    "numberOfJobExecutions": 1,
+    "submitInterval": -1,
+    "submittable": true,
+    "loadType": "EXTERNAL_LOAD"
+  },
+  {
+    "_note": "SUBMITTED and STILL RUNNING — a batch genuinely in flight. Constructed from the shape of loadId 66 with its completionDate removed, because the live hub happened to hold none at read time. Labelled so it is never mistaken for an observation.",
+    "loadId": 120,
+    "loadStatus": "RUNNING",
+    "loadCreator": "user.a",
+    "loadCreationDate": "2026-08-05T23:50:00.000Z",
+    "loadSubmitDate": "2026-08-05T23:50:10.000Z",
+    "batchSubmitter": "user.a",
+    "batchId": 35,
+    "integrationJobName": "DUJ_EntityA",
+    "integrationJobQueueName": "Default",
+    "integrationJob": {
+      "startDate": "2026-08-05T23:50:12.000Z",
+      "duration": 4000,
+      "currentTask": {
+        "name": "Consolidate golden records",
+        "startDate": "2026-08-05T23:50:14.000Z",
+        "duration": 2000
+      },
+      "notificationStatus": "PENDING"
+    },
+    "numberOfJobExecutions": 1,
+    "submitInterval": -1,
+    "submittable": false,
+    "loadType": "EXTERNAL_LOAD"
+  },
+  {
+    "_note": "CANCELED. Terminal, never blocks.",
+    "loadId": 45,
+    "loadStatus": "CANCELED",
+    "loadCreator": "user.c",
+    "loadCreationDate": "2026-07-30T19:47:05.887Z",
+    "numberOfJobExecutions": 0,
+    "submitInterval": -1,
+    "submittable": false,
+    "loadType": "DIRECT_AUTHORING"
+  }
+]

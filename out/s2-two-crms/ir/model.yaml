@@ -1,0 +1,57 @@
+# Scenario 2: two CRMs sharing a centrally issued customer number -> ID-matched.
+#
+# postgresql: the hub this model is deployed to. Declared, never patched at deploy time
+# (see s4's model.yaml for what that override once hid).
+model: {name: CustomerHub, label: Customer Hub, target_technology: postgresql}
+
+# CA-017. Without this the model deploys and certifies and then refuses every read,
+# with HTTP 200 and an empty enrichedRecord rather than a permission error.
+roles:
+  - name: semarchyAdmin
+    role_name: semarchyAdmin
+    label: Semarchy Administrator
+    description: Full data administration and integration access.
+    data_admin: true
+    integration_ws: true
+
+publishers:
+  - {name: CrmEu, code: CRM_EU, label: EU CRM}
+  - {name: CrmUs, code: CRM_US, label: US CRM}
+
+entities:
+  - name: Customer
+    type: id_matched
+    label: Customer
+    subject_name: FullName
+    attributes:
+      # Single PK: REGION_CODE carries no identity, so no concatenation is needed.
+      - {name: CustomerNumber, type: Integer, pk: true, mandatory: true,
+         mandatory_scope: PRE_CONSO}
+      - {name: FullName, type: String, length: 200, mandatory: true,
+         mandatory_scope: POST_CONSO, searchable: true}
+      - {name: Email, type: String, length: 255, searchable: true}
+      - {name: RegionCode, type: String, length: 4}
+      # Restored 2026-08-05. These were omitted "until the datatype UUIDs are harvested
+      # from this instance" — a blocker that the registry bootstrap removed some time
+      # ago (registry.py: "all twelve documented built-ins are now mapped"). The note
+      # outlived the constraint it described, and because the note was the only record
+      # of WHY the attributes were absent, LARGEST_VALUE — the one strategy this
+      # scenario exists to exercise — stayed unexercised on both sides.
+      - {name: CreditLimit, type: Decimal, precision: 18, scale: 2}
+      - {name: UpdatedAt, type: Timestamp}
+
+complex_types: []
+lov_types: []
+references: []
+user_defined_types: []
+external_dependencies: []
+
+# CA-018 on Customer/NormalizeEmail.Email, answered rather than left open.
+#
+# An email address HAS a canonical form and it is the lowercase one, so unlike a name
+# or an address the pre-normalized value carries no fact the hub needs to keep. This is
+# the case LESSONS §47 explicitly leaves to the operator: in-place normalization is a
+# legitimate call when the raw form is genuinely uninformative. What §47 refuses is
+# doing it BY ACCIDENT, so it is written down here instead of being silently correct.
+acknowledged_gaps:
+  - "CA-018:Customer/NormalizeEmail.Email"

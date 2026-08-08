@@ -1,0 +1,12 @@
+Semarchy xDM AI Compiler
+Copyright 2026 Forge International Services
+
+Semarchy and Semarchy xDM are trademarks of Semarchy SAS. This project is an
+independent work and is not affiliated with, endorsed by, or supported by
+Semarchy SAS.
+
+This distribution includes one page derived from the public Semarchy xDM
+documentation (docs/SemQL/function-list.md, a factual SemQL function table),
+retained because offline SemQL validation depends on it. Its source is
+https://semarchy.com/doc/semarchy-xdm/ — all documentation content remains the
+property of its owner.

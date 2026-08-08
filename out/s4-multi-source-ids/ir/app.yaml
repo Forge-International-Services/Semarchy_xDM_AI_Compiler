@@ -1,0 +1,291 @@
+# Scenario 4 — the application layer.
+#
+# Designed around ONE record, and it is a real one. On 2026-08-07 s4 became the second
+# scenario ever to hold data: load 135, INTEGRATE_DATA DONE, 5 Customer goldens over 8
+# masters. Group C — ERP.ERP-7002 and SFDC.SFDC-1003, "Rainier Medical Group" — matched
+# at 88 on P_NAME_STATE_ZIP. 88 is above mergeThresholdNewGroup (80) and below
+# autoConfirmGoldenThreshold (95), so the pair is MERGED AND LEFT UNCONFIRMED: one
+# golden, ConfirmationStatus NOT_CONFIRMED, ConfirmedGold_CustomerGoldenId NULL.
+#
+# That is a steward decision sitting in the hub with nobody able to open it. The REST
+# confirm path was refuted at wire grade the same day — PERSIST_DATA and
+# MASS_UPDATE_DATA both 400 on the confirmation built-ins, and the UM table is SQL-only
+# on a bench with no database access. So the application layer is not a nicety here; it
+# is the only surface on which that decision can be made.
+#
+# WHAT THIS IS NOT DOING, deliberately:
+#
+#   * NO Opportunity surfaces. Opportunity is BASIC — no masters, no match groups, no
+#     suggestions — so it cannot produce the decision this layer exists to serve. Four
+#     Opportunity goldens are in the hub and they will stay unreachable from the UI
+#     until someone states a job for them. Scope discipline over completeness.
+#   * NO stepper and NO workflow. s3 carries a stepper for exactly one reason: a
+#     workflow UserTask opens one, and a UserTask with a null stepper makes the whole
+#     model UNEXPORTABLE. s4 has no workflow, so a stepper would be a screen nobody
+#     asked for and a shape nobody needs.
+#   * NO reference fields on any form or collection. CustomerParent (the self-ref) and
+#     OpportunityCustomer both exist in the model, and neither appears here. A
+#     reference ROLE is a TO_ONE_PATH, not a scalar — that is IR-032, found in this
+#     scenario four days after the IR was written and only when a job finally generated
+#     validation SQL. Putting `Parent` in a column `value` would be the same mistake in
+#     a register with no offline check behind it. s3 included none either.
+#   * NO CreateAction and NO DeleteAction, for s3's reason: Customer records arrive
+#     from three publishers through INTEGRATE_DATA, and a record typed straight into
+#     the hub would have no publisher behind it and no source to reconcile against.
+#   * NO grid view anywhere. `gridAllowed` needs a display card with primaryImage or
+#     the DEPLOY refuses (IR-024), and there is no image in this model to put in it.
+
+display_cards:
+  - entity: Customer
+    name: CustomerDisplayCard
+    default: true
+    # Same three roles s3's card assigns, mapped onto this model's discriminators:
+    # identity primary, strongest discriminator second, weakest third.
+    #
+    # ErpKey is the strongest discriminator s4 has. Two masters carrying the same
+    # normalized ERP key merge at 100 and never reach a steward; it is precisely the
+    # pair where BOTH carried keys are null that falls through to P_NAME_STATE_ZIP and
+    # lands in the band. So on the queue this line is often blank, and the blank is the
+    # evidence: no ERP key is WHY this decision is a human's.
+    primary_text: Name
+    secondary_text: ErpKey
+    # The RAW address, not the normalized one. The normalized members are equal by
+    # construction on any pair P_NAME_STATE_ZIP matched — StateCodeNorm and Zip5 are
+    # two thirds of its condition — so showing them would show the steward only what
+    # the two records agree about. The raw values still differ: group C is
+    # "WA 98004" against "wa 98004-0099".
+    supporting_text: "Address.StateCode || ' ' || Address.Zip"
+
+collections:
+  - entity: Customer
+    name: CustomerCollection
+    default: true
+    description: Every golden Customer.
+    display_card: CustomerDisplayCard
+    columns:
+      - {name: Name,       value: Name,              component: semTextField, label: Name,        position: 0}
+      - {name: ErpKey,     value: ErpKey,            component: semTextField, label: ERP key,     position: 1}
+      - {name: BillingKey, value: BillingKey,        component: semTextField, label: Billing key, position: 2}
+      - {name: SfdcKey,    value: SfdcKey,           component: semTextField, label: CRM key,     position: 3}
+      - {name: State,      value: Address.StateCode, component: semTextField, label: State,       position: 4}
+      - {name: Zip,        value: Address.Zip,       component: semTextField, label: Zip,         position: 5}
+
+  # A SECOND collection, for the same reason s3 has one. The steward's question in the
+  # queue is not "who is this?" but "why does the system think these are one company,
+  # and has anybody agreed?". So this one leads with the evidence and the identifying
+  # columns follow. policy.STEWARD_QUEUE_FILTERS names exactly this vocabulary:
+  # HasSuggestedMerge, ConfirmationStatus, MastersCount.
+  - entity: Customer
+    name: CustomerReviewQueue
+    default: false
+    description: Customers whose match group no steward has judged.
+    display_card: CustomerDisplayCard
+    columns:
+      - {name: Name,         value: Name,               component: semTextField, label: Name,     position: 0}
+      - {name: MastersCount, value: MastersCount,       component: semTextField, label: Masters,  position: 1, data_type: INTEGER}
+      - {name: Confidence,   value: ConfidenceScore,    component: semTextField, label: Score,    position: 2, data_type: INTEGER}
+      # ONE COLUMN s3's queue does not have, and s4 is the reason it is needed.
+      #
+      # s3's band held records APART: SUP-1/SUP-3 scored 90 and stayed two goldens, so
+      # "is there a suggestion?" and "has it been judged?" were the same question and
+      # HasSuggestedMerge answered both. s4's band does not. A pair at 88 is merged
+      # into ONE golden and left NOT_CONFIRMED, so MastersCount already reads 2 and the
+      # golden looks settled. ConfirmationStatus is the only column on the queue that
+      # distinguishes the score-100 groups (CONFIRMED) from group C (NOT_CONFIRMED).
+      #
+      # Attested, not invented: docs/SemQL/navigation-list.md lists it on GD, and
+      # samples/corpus-a-org-mdm-0.1.xml filters a business view on
+      # `ConfirmationStatus = 'CONFIRMED'`.
+      - {name: Confirmed,    value: ConfirmationStatus, component: semTextField, label: Confirmed, position: 3}
+      - {name: ErpKey,       value: ErpKey,             component: semTextField, label: ERP key,  position: 4}
+      - {name: Zip,          value: Address.Zip,        component: semTextField, label: Zip,      position: 5}
+
+forms:
+  - entity: Customer
+    name: CustomerForm
+    default: true
+    description: Customer detail, split by WHO OWNS THE VALUE.
+    containers:
+      - {name: Identity,  kind: tab, label: Identity, position: 0}
+      - {name: Address,   kind: tab, label: Address,  position: 1}
+      # Every attribute on this tab is written by an enricher. Separating them is not
+      # tidiness — it is the same NO_OVERRIDE argument s3 makes, and s4 makes it with a
+      # wrinkle worth stating out loud rather than fixing here:
+      #
+      #   NormalizedName, ErpKeyNorm, BillingKeyNorm  -> DerivedRule, NO_OVERRIDE.
+      #     A steward edit is discarded by the next certification run. Correct.
+      #   Address.StateCodeNorm, Address.Zip5         -> AddressRule, which declares no
+      #     override_strategy and therefore takes the schema default,
+      #     UNTIL_NEXT_USER_CHANGE. These two are enricher output under an override
+      #     strategy that lets an edit stick until NormalizeAddress silently reverts it.
+      #
+      # That is a certify.yaml question, not an app.yaml one, and this file does not
+      # touch certify.yaml. Grouping all five here at least puts them behind one label
+      # that says the pipeline owns them.
+      - {name: MatchKeys, kind: tab, label: Match keys (derived), position: 2}
+    fields:
+      # Identity carries the carried keys as well as the name, and that is a decision.
+      # 04-app-plan.md proposed identity / cross-references / address as three separate
+      # groups. It is folded to two because of what a duplicate manager actually opens:
+      # ONE TAB, with enableMasterValuePicking operating on the fields ON that tab. A
+      # steward comparing ERP-7002 against SFDC-1003 has to see the name AND which
+      # system's identifier each side carries, on one screen, or the picker offers a
+      # single field. The plan's grouping is right for a browsing form and wrong for
+      # the only screen this layer exists to serve.
+      - {name: Name,       value: Name,       component: semTextField, container: Identity, label: Name,        position: 0}
+      - {name: ErpKey,     value: ErpKey,     component: semTextField, container: Identity, label: ERP key,     position: 1}
+      - {name: BillingKey, value: BillingKey, component: semTextField, container: Identity, label: Billing key, position: 2}
+      - {name: SfdcKey,    value: SfdcKey,    component: semTextField, container: Identity, label: CRM key,     position: 3}
+      # The RAW inbound address, in its own tab. Sized for what the publisher sends —
+      # Zip holds ZIP+4 — and never overwritten by NormalizeAddress, which writes the
+      # derived members instead (LESSONS §47, CA-018).
+      - {name: StateCode,  value: Address.StateCode, component: semTextField, container: Address, label: State, position: 0}
+      - {name: Zip,        value: Address.Zip,       component: semTextField, container: Address, label: Zip,   position: 1}
+      - {name: NormalizedName, value: NormalizedName,          component: semTextField, container: MatchKeys, label: Normalized name,  position: 0}
+      - {name: ErpKeyNorm,     value: ErpKeyNorm,              component: semTextField, container: MatchKeys, label: ERP key (norm),   position: 1}
+      - {name: BillingKeyNorm, value: BillingKeyNorm,          component: semTextField, container: MatchKeys, label: Billing key (norm), position: 2}
+      - {name: StateCodeNorm,  value: Address.StateCodeNorm,   component: semTextField, container: MatchKeys, label: State (norm),     position: 3}
+      - {name: Zip5,           value: Address.Zip5,            component: semTextField, container: MatchKeys, label: Zip5,             position: 4}
+
+dups_managers:
+  - entity: Customer
+    name: ReviewCustomer
+    label: Review suggested Customer merges
+    description: The queue for match groups no steward has confirmed.
+    collection: CustomerReviewQueue
+    table_collection: CustomerCollection
+    display_card: CustomerDisplayCard
+    form: CustomerForm
+    form_tab: Identity
+    # INTEGRATE_DATA, and it is the job this model actually declares — certify.yaml
+    # `jobs:` names exactly one, `INTEGRATE_DATA`, with tasks Customer at position 1
+    # and Opportunity at 2. Not assumed: s4 spent 2026-08-07 discovering that a model
+    # can be DL_READY with records staged and no job to submit them to (IR-030,
+    # LESSONS §54), which is the failure this ref would repeat silently.
+    #
+    # Re-certify on finish, for s3's reason: confirming or splitting group C changes
+    # which masters back the golden, so consolidation and survivorship have to run
+    # again or the record keeps the values it had before the decision.
+    model_job: INTEGRATE_DATA
+    settings:
+      # policy.MASTER_VALUE_PICKING, and it earns its keep here more than anywhere.
+      # Group C's two masters disagree on the raw Name ("Rainier Medical Group" against
+      # "rainier medical group") and on the raw Zip (98004 against 98004-0099). ERP
+      # outranks Sfdc in NameRule, so the golden already holds the lowercase form; a
+      # steward confirming the merge should be able to say otherwise.
+      enableMasterValuePicking: "true"
+
+action_sets:
+  - entity: Customer
+    name: CustomerActions
+    label: Customer actions
+    default: true
+    actions:
+      - {kind: ReviewAndConfirm, name: ReviewMerges, label: Review suggested merges,
+         position: 0, dups_manager: ReviewCustomer}
+      - {kind: MergeOrSplit, name: MergeOrSplit, label: Merge or split,
+         position: 1, dups_manager: ReviewCustomer}
+      - {kind: ExportAction, name: Export, label: Export, position: 2}
+      # No CreateAction, no DeleteAction — see the header.
+
+business_views:
+  - entity: Customer
+    name: CustomerSteward
+    label: Customer stewardship
+    root: CustomerNode
+    root_label: Customer
+    root_plural_label: Customers
+    description: Match groups a rule has formed but no steward has confirmed.
+    # The filter IS the queue. corpus model A does the same on OrganizationStewardView, and
+    # s3 on PartySteward. Without it the steward opens all five goldens and has to find
+    # the one that needs them, which is how a queue stops being used.
+    #
+    # BOTH regimes, because s4's band means something different from s3's (measured
+    # 2026-08-08, after the first deployed edition rendered this queue EMPTY):
+    #
+    #   held apart with a suggestion   HasSuggestedMerge = '1'      s3's regime
+    #   merged but unconfirmed         ConfirmationStatus = 'NOT_CONFIRMED'   s4's
+    #
+    # At 88 the pair MERGES — SuggestedMergeID is NULL on every master and
+    # HasSuggestedMerge false on all five goldens (wire-read), so the s3-attested
+    # predicate alone selects a state this dataset can never be in. The first version
+    # of this comment argued that being wrong in the filter costs an empty queue and
+    # chose the attested predicate anyway; the queue came up empty. Equality on
+    # ConfirmationStatus is sample-attested as a view filter (corpus model A), and both GD
+    # columns were wire-read on this location before this predicate was written.
+    filter: "HasSuggestedMerge = '1' or ConfirmationStatus = 'NOT_CONFIRMED'"
+    nodes:
+      - name: CustomerNode
+        entity: Customer
+        collection: CustomerReviewQueue
+        form: CustomerForm
+        action_set: CustomerActions
+        display_card: CustomerDisplayCard
+        # Name, not ConfidenceScore DESC. "Highest score first" is inexpressible in
+        # this register: the node-sort SemQL scope resolves model attributes, roles
+        # and audit columns ONLY — the Validation view enumerated it (2026-08-08) and
+        # no matching built-in is in the list, though the same built-ins DO resolve in
+        # collection columns (s3 renders Score) and in the view filter above. IR-035
+        # now refuses the built-ins here. The score still leads the queue visually:
+        # it is the third column of CustomerReviewQueue.
+        sort_expression: Name
+
+  - entity: Customer
+    name: CustomerBrowse
+    label: All customers
+    root: AllCustomers
+    root_label: Customer
+    root_plural_label: Customers
+    description: Unfiltered golden data, for looking a company up rather than judging it.
+    nodes:
+      - name: AllCustomers
+        entity: Customer
+        collection: CustomerCollection
+        form: CustomerForm
+        action_set: CustomerActions
+        display_card: CustomerDisplayCard
+        sort_expression: Name
+
+applications:
+  # Named apart from the MODEL, which is AccountHub. s3 does the same — application
+  # PartyHub over model PartyHubProbe — and keeping them distinct keeps "which object
+  # is this?" answerable from a name in a log line.
+  - name: AccountHubApp
+    label: Account Hub
+    title: Account Hub
+    description: Master customer data across Salesforce, ERP and Billing.
+    default_action: OpenReviewQueue
+    actions:
+      # EXACTLY ONE root folder with no parent, everything else beneath it. The
+      # deployer refuses "Missing root folder for: AccountHubApp" otherwise, and the
+      # import accepts it happily — IR-025 catches it offline.
+      - {kind: FolderAction, name: Root, label: Root Folder, position: 0}
+      - {kind: FolderAction, name: Stewardship, label: Stewardship, position: 0,
+         parent_folder: Root}
+      - {kind: BrowseBusinessViewAction, name: OpenReviewQueue,
+         label: Review queue, position: 0, parent_folder: Stewardship,
+         view_entity: Customer, view: CustomerSteward,
+         # GD: the queue judges GOLDEN records. The masters behind them are what the
+         # duplicate manager opens INTO — it is not what the queue lists.
+         settings: {viewType: GD}}
+      - {kind: BrowseBusinessViewAction, name: OpenAllCustomers,
+         label: All customers, position: 1, parent_folder: Stewardship,
+         view_entity: Customer, view: CustomerBrowse, settings: {viewType: GD}}
+      # Global search, because the app plan's item 5 is the one requirement in it that
+      # is about arriving rather than browsing: a steward holding an ERP or Billing id
+      # from a downstream system needs the golden record from it. Name, ErpKey,
+      # BillingKey and SfdcKey are all `searchable: true` in model.yaml, so the model
+      # side of that is already paid for.
+      - {kind: GlobalSearchAction, name: GlobalSearch, label: Search, position: 1,
+         parent_folder: Root}
+      # No MyTasksAction. s3 has one because it has a workflow raising tasks; s4 has
+      # neither, and a My Tasks entry that is empty by construction is a screen that
+      # teaches a steward to stop looking.
+    navigation:
+      - kind: group
+        name: Main
+        label: Account Hub
+        position: 0
+        items:
+          - {action: Stewardship, position: 0}
+          - {action: GlobalSearch, position: 1}

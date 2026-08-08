@@ -1,0 +1,28 @@
+# Scenario 1: reference data that is a LOV, not an entity.
+model:
+  name: CountryReference
+  label: Country Reference
+  # postgresql: the hub this model is deployed to. Declared, never patched at deploy
+  # time (see s4's model.yaml for what that override once hid).
+  target_technology: postgresql
+
+# No `roles:`. This model has no entities, so there is no entity privilege to grant —
+# CA-017 deliberately stays silent here. Whether an LOV-only model is READABLE without
+# a grant is a separate question, and an untested one.
+
+publishers: []
+entities: []
+complex_types: []
+references: []
+user_defined_types: []
+external_dependencies: []
+
+lov_types:
+  - name: Country
+    values:
+      - {code: AD, label: Andorra}
+      - {code: AE, label: United Arab Emirates}
+      - {code: FR, label: France}
+      - {code: GB, label: United Kingdom}
+      - {code: US, label: United States}
+      # ... 244 further codes loaded from the source table

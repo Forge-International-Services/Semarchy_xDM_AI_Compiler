@@ -1,0 +1,27 @@
+# Credentials — never commit real values. The contract lives in .env.example.
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+dist/
+*.egg-info/
+
+# The mirrored documentation corpus is built locally (scripts/fetch_docs.py) and is
+# not redistributed. The one tracked exception is docs/SemQL/function-list.md.
+docs/*
+!docs/SemQL/
+docs/SemQL/*
+!docs/SemQL/function-list.md
+transcripts/
+slides_text/
+labs_text/
+notes/
+index/
+search/
+raw/
+audio/

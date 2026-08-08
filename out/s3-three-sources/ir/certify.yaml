@@ -1,0 +1,130 @@
+# Every enricher here is PRE_CONSO because a match rule reads its output.
+# Matching runs on master records, so a POST_CONSO scope would silently degrade
+# match rates. IR-009 enforces it.
+enrichers:
+  - entity: Party
+    name: NormalizeName
+    kind: semql
+    scope: PRE_CONSO
+    position: 1
+    expressions:
+      - {attribute: NormalizedName, expression: "UPPER(TRIM(FullName))"}
+  - entity: Party
+    name: PhoneticName
+    kind: semql
+    scope: PRE_CONSO
+    position: 2
+    expressions:
+      - {attribute: PhoneticNameToken, expression: "METAPHONE(NormalizedName, 8)"}
+  - entity: Party
+    name: NormalizeEmail
+    kind: semql
+    scope: PRE_CONSO
+    position: 1
+    expressions:
+      - {attribute: NormalizedEmail, expression: "LOWER(TRIM(Email))"}
+  # Promised by 02-certification.md and ABSENT from the IR until 2026-08-03. The match
+  # rules bin on Address.Zip5 and Address.StateCode, so without this the binning keys
+  # were raw publisher values: records that should share a bin did not, and records in
+  # different bins are never compared. CA-013 exists because of this gap.
+  - entity: Party
+    name: NormalizeAddress
+    kind: semql
+    scope: PRE_CONSO
+    position: 1
+    expressions:
+      - {attribute: Address.StateCode, expression: "UPPER(TRIM(Address.StateCode))"}
+      - {attribute: Address.Zip5, expression: "SUBSTR(REGEXP_REPLACE(TRIM(Address.Zip5), '[^0-9]', ''), 1, 5)"}
+
+validations:
+  # Designed in 02-certification.md; previously missing from the IR (CA-001).
+  - {entity: Party, name: NameOrEmailPresent, scope: PRE_CONSO,
+     condition: "FullName IS NOT NULL OR Email IS NOT NULL"}
+  - {entity: Party, name: PlausibleZip, scope: PRE_CONSO,
+     condition: "Address.Zip5 IS NULL OR LENGTH(Address.Zip5) = 5"}
+
+matchers:
+  - entity: Party
+    policy: {auto_merge_at: 95, review_from: 80}
+    rules:
+      - name: D_EXACT_EMAIL
+        score: 100
+        condition: "Record1.NormalizedEmail = Record2.NormalizedEmail"
+        binning: ["NormalizedEmail"]
+      - name: P_NAME_ZIP
+        score: 90
+        condition: "Record1.PhoneticNameToken = Record2.PhoneticNameToken AND Record1.Address.Zip5 = Record2.Address.Zip5"
+        binning: ["Address.Zip5"]
+      - name: P_NAME_CITY_STATE
+        score: 85
+        condition: "Record1.PhoneticNameToken = Record2.PhoneticNameToken AND Record1.Address.StateCode = Record2.Address.StateCode"
+        binning: ["Address.StateCode"]
+
+# Split by PROVENANCE, not by subject. A survivorship rule carries ONE override
+# strategy, so a publisher-supplied value and the normalized value derived from it
+# cannot share a rule: the first should accept a steward's edit, the second must not.
+# House policy, agent/ir/policy.py § survivorship (CA-012).
+survivorship:
+  - entity: Party
+    name: NameRule                      # publisher-supplied, a steward may correct it
+    strategy: PREFERRED_PUBLISHER
+    attributes: [FullName]
+    publisher_rankings: [Support, Marketing, Events]
+    override_strategy: UNTIL_NEXT_USER_CHANGE
+  # The Master ID rule: which matched master record's ID becomes the golden ID.
+  # Mandatory on every matched entity — without it the deploy dies in
+  # Entity.getIdSurvivorshipRule. Takes rankings, no attributes, no override.
+  - entity: Party
+    name: MasterIdRule
+    kind: id
+    strategy: PREFERRED_PUBLISHER
+    attributes: []
+    publisher_rankings: [Support, Marketing, Events]
+  - entity: Party
+    name: SourceKeyRule
+    strategy: PREFERRED_PUBLISHER
+    attributes: [SourceKey]
+    publisher_rankings: [Support, Marketing, Events]
+    override_strategy: UNTIL_NEXT_USER_CHANGE
+  - entity: Party
+    name: EmailRule                     # publisher-supplied
+    strategy: PREFERRED_PUBLISHER
+    attributes: [Email]
+    publisher_rankings: [Support, Marketing, Events]
+    override_strategy: UNTIL_NEXT_USER_CHANGE
+  - entity: Party
+    name: DerivedRule                   # enricher output — the pipeline owns these
+    strategy: PREFERRED_PUBLISHER
+    attributes: [NormalizedName, NormalizedEmail, PhoneticNameToken]
+    publisher_rankings: [Support, Marketing, Events]
+    override_strategy: NO_OVERRIDE
+
+# The integration job. Without one the model deploys, certifies a single record over
+# the API, and then refuses every load: "Job [INTEGRATE_DATA] does not exist. Known
+# jobs are []". The per-phase flags are the executable half of the certification
+# design — a matcher that no job task enables never runs.
+  # The catch-all. Every non-PK attribute must be reachable by some survivorship
+  # rule: an uncovered attribute leaves the override task builder with an empty
+  # Optional and the DEPLOY fails in PrepareOverridesTaskBuilder — after the model
+  # has imported cleanly. The four Address members were the ones nothing covered.
+  - entity: Party
+    name: DefaultRule
+    default_rule: true
+    strategy: PREFERRED_PUBLISHER
+    attributes: [Address.Street, Address.City, Address.StateCode, Address.Zip5]
+    publisher_rankings: [Support, Marketing, Events]
+    override_strategy: UNTIL_NEXT_USER_CHANGE
+
+jobs:
+  - name: INTEGRATE_DATA
+    job_type: INTEGRATION
+    queue: Default
+    description: Load and certify Party from all three publishers.
+    tasks:
+      - entity: Party
+        position: 1
+        source_validation: true
+        source_enrichment: true
+        match: true
+        consolidation: true
+        consolidated_enrichment: true

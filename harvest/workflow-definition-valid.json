@@ -1,0 +1,238 @@
+{
+ "e2eTests": [],
+ "workflowDefinitions": [
+  {
+   "name": "test",
+   "label": "Test",
+   "workflowAdminRole": null,
+   "rootEntities": [
+    {
+     "name": "Person",
+     "entity": {
+      "ref": [
+       "Person"
+      ]
+     },
+     "cardinality": "SINGLE_RECORD",
+     "semQLAlias": "Person",
+     "displayCard": null,
+     "childEntities": []
+    }
+   ],
+   "steps": [
+    {
+     "x-type": "UserTask",
+     "name": "assignment",
+     "label": "Assignment",
+     "icon": null,
+     "position": {
+      "x": -130.0,
+      "y": -210.0
+     },
+     "application": {
+      "ref": [
+       "CustomerB2C"
+      ]
+     },
+     "assigneeRequiredRole": {
+      "ref": [
+       "DataSteward"
+      ]
+     },
+     "assigneeCondition": "",
+     "assigneeCanRelease": true,
+     "taskType": "DATA_AUTHORING",
+     "entity": {
+      "ref": [
+       "Person"
+      ]
+     },
+     "stepper": {
+      "ref": [
+       "Person",
+       "AuthorPersons"
+      ]
+     },
+     "myTasksConfiguration": {
+      "collection": {
+       "ref": [
+        "Person",
+        "PersonConfirmMatchesCollection"
+       ]
+      }
+     },
+     "transitions": [
+      {
+       "toStep": {
+        "ref": [
+         "end"
+        ]
+       },
+       "labelDistance": 0.5,
+       "labelOffset": 0.0,
+       "bendPoints": [],
+       "name": "done",
+       "label": "Done",
+       "icon": null,
+       "requiredRole": null,
+       "userTaskCompletionRequired": true,
+       "validations": [],
+       "behaviorOnTransition": "KEEP_DATA",
+       "showWaitDialog": true,
+       "transitionParameters": {
+        "nextTaskAssigneeSupported": false,
+        "nextTaskAssigneeRequired": false,
+        "descriptionParamSupported": false,
+        "commentParamSupported": true,
+        "commentParamRequired": false,
+        "priorityParamSupported": false,
+        "dueDateParamSupported": false,
+        "dueDateParamRequired": false,
+        "attachmentParamSupported": true,
+        "attachmentParamRequired": false
+       }
+      }
+     ],
+     "taskAssignmentNotifications": {
+      "enableCandidateNotifications": true,
+      "enableAssigneeNotifications": true
+     },
+     "taskTimeLimitNotifications": {
+      "maxDurationMinutes": null,
+      "notifyCandidatesOrAssignee": false,
+      "notifyAdmin": false,
+      "notifyRole": null
+     },
+     "taskWorkflowDueDateNotifications": {
+      "notifyCandidatesOrAssignee": false
+     }
+    },
+    {
+     "x-type": "Automation",
+     "name": "autoTest",
+     "label": "Auto Test",
+     "icon": null,
+     "position": {
+      "x": -80.0,
+      "y": -80.0
+     },
+     "type": "EMAIL",
+     "rootEntity": null,
+     "conditionForDeletion": null,
+     "deleteType": "SOFT_DELETE",
+     "deleteAuthorExpression": null,
+     "integrationJob": null,
+     "submitUserExpression": null,
+     "application": {
+      "ref": [
+       "CustomerB2C"
+      ]
+     },
+     "replyTo": "",
+     "senderName": "test@claude.com",
+     "to": [
+      {
+       "name": "receipient",
+       "sourceType": "USERS_FROM_ROLE",
+       "roleValue": {
+        "ref": [
+         "DataSteward"
+        ]
+       },
+       "semqlValue": ""
+      }
+     ],
+     "recipientMaxCount": 1000,
+     "customParameters": [],
+     "subject": "urgent",
+     "contentType": "HTML_PREFORMATTED",
+     "body": "check this out",
+     "failOnError": true,
+     "workflowMetadataChanges": [],
+     "databaseProcedureName": null,
+     "databaseProcedureArguments": [],
+     "transition": {
+      "toStep": {
+       "ref": [
+        "assignment"
+       ]
+      },
+      "labelDistance": 0.5,
+      "labelOffset": 0.0,
+      "bendPoints": [],
+      "name": "outgoing",
+      "label": "Outgoing"
+     }
+    },
+    {
+     "x-type": "StartEvent",
+     "name": "start",
+     "position": {
+      "x": -260.0,
+      "y": -90.0
+     },
+     "label": "Start",
+     "initiatorRequiredRole": null,
+     "defaultPriority": "NORMAL",
+     "startupContext": {
+      "contextType": "START_FROM_NOTHING",
+      "authoredEntity": null,
+      "selectionSourceType": "GOLDEN_DATA",
+      "conditionOnSelection": null,
+      "integrationJob": null,
+      "initiatedAs": null,
+      "dataRecordOutputs": [],
+      "referenceToParentName": null
+     },
+     "startupParameters": {
+      "descriptionParamSupported": true,
+      "commentParamSupported": true,
+      "commentParamRequired": false,
+      "priorityParamSupported": true,
+      "dueDateParamSupported": false,
+      "dueDateParamRequired": false,
+      "nextTaskAssigneeSupported": false,
+      "nextTaskAssigneeRequired": false,
+      "attachmentParamSupported": true,
+      "attachmentParamRequired": false,
+      "showWaitDialog": true
+     },
+     "transition": {
+      "toStep": {
+       "ref": [
+        "autoTest"
+       ]
+      },
+      "labelDistance": 0.5,
+      "labelOffset": 0.0,
+      "bendPoints": [],
+      "name": "outgoing"
+     }
+    },
+    {
+     "x-type": "EndEvent",
+     "name": "end",
+     "position": {
+      "x": -20.0,
+      "y": -342.0
+     }
+    }
+   ],
+   "generalProperties": {
+    "attachmentMaxFileSize": 10000,
+    "attachmentMaxFileCount": 5,
+    "attachmentMimeTypes": "*"
+   },
+   "retentionPolicy": {
+    "retentionType": "FOREVER",
+    "retentionDuration": null,
+    "retentionTimeUnit": "DAYS"
+   },
+   "notifications": {
+    "notifyAdminOnWorkflowDueDate": false
+   },
+   "x-spec-version": "1.12"
+  }
+ ],
+ "x-spec-version": "1.12"
+}

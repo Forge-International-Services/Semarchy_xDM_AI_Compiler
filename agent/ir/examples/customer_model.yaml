@@ -1,0 +1,41 @@
+# Sprint-03 scenario 3: three sources, no shared key, names and addresses.
+model:
+  name: CustomerHub
+  label: Customer Hub
+  target_technology: snowflake
+
+publishers:
+  - {name: Crm,       code: CRM,       label: CRM System}
+  - {name: Sales,     code: SALES,     label: Sales App}
+  - {name: Marketing, code: MARKETING, label: Marketing Platform}
+
+entities:
+  - name: Customer
+    type: fuzzy
+    label: Customer
+    subject_name: FullName
+    attributes:
+      - {name: CustomerId, type: Integer, pk: true, mandatory: true}
+      - {name: FullName,   type: String, length: 200, mandatory: true,
+         mandatory_scope: POST_CONSO, searchable: true}
+      - {name: Email,      type: String, length: 255, mandatory_scope: PRE_CONSO}
+      - {name: NameToken,  type: String, length: 64}
+      - {name: Status,     type: CustomerStatus, lov_scope: PRE_CONSO}
+    complex_attributes:
+      - {name: Address, type: AddressType}
+
+complex_types:
+  - name: AddressType
+    members:
+      - {name: Street, type: String, length: 200}
+      - {name: City,   type: String, length: 100}
+      - {name: Zip5,   type: String, length: 5}
+
+lov_types:
+  - name: CustomerStatus
+    values:
+      - {code: ACTIVE,  label: Active}
+      - {code: PENDING, label: Pending}
+
+references: []
+external_dependencies: []

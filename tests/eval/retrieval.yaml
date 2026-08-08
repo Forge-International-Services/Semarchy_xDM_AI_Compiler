@@ -1,0 +1,67 @@
+# Golden retrieval set for the knowledge layer (sprint 01).
+#
+# Each question is one the agent will actually face during phases 1-4, and
+# expect_file is the doc page that should answer it. Every expect_file was
+# confirmed to exist before this file was written.
+#
+# Thresholds (sprint 01 acceptance): recall@3 >= 0.90, recall@1 >= 0.70
+
+- q: Which entity type do I use when several sources share a unique identifier?
+  expect_file: docs/Design/logical-model/entities.md
+- q: When should an entity be a basic entity instead of matched?
+  expect_file: docs/Design/logical-model/entities.md
+- q: What is a publisher and what does its code identify?
+  expect_file: docs/Design/data-certification/publishers.md
+- q: How do I create a publisher and set it active?
+  expect_file: docs/Design/data-certification/publishers.md
+
+- q: How do I export the model validation report?
+  expect_file: docs/Design/logical-model/validate-a-model.md
+- q: What happens to applications when a model has validation errors?
+  expect_file: docs/Design/logical-model/validate-a-model.md
+
+- q: Can I import a model exported from a different product version?
+  expect_file: docs/Manage/models/move-models-at-design-time.md
+- q: How do I import an export file to replace an existing model edition?
+  expect_file: docs/Manage/models/move-models-at-design-time.md
+- q: Which REST endpoints manage models and data locations?
+  expect_file: docs/Manage/management-rest-api.md
+- q: How do I deploy a model edition to a data location?
+  expect_file: docs/Manage/deploy/deploy-a-model-edition.md
+- q: How do I move a closed model edition to a production deployment repository?
+  expect_file: docs/Manage/deploy/deploy-to-remote-repository.md
+
+- q: How do I create a matcher for a fuzzy matched entity?
+  expect_file: docs/Design/matching/create-a-matcher.md
+- q: What are binning expressions in a match rule?
+  expect_file: docs/Design/matching/match-rules.md
+- q: How are match groups merged into golden records?
+  expect_file: docs/Design/matching/matching.md
+- q: What is multi-iteration grouping and transitive match score?
+  expect_file: docs/Design/matching/advanced-matching-algorithms.md
+- q: How do I create a survivorship rule?
+  expect_file: docs/Design/matching/create-a-survivorship-rule.md
+- q: Which consolidation strategies are available for survivorship?
+  expect_file: docs/Design/matching/survivorship.md
+
+- q: Which built-in datatypes can an attribute use?
+  expect_file: docs/Design/logical-model/built-in-datatypes.md
+- q: What is the execution scope of an enricher?
+  expect_file: docs/Design/data-quality/enrichers.md
+- q: How do validations differ by severity and scope?
+  expect_file: docs/Design/data-quality/validations.md
+- q: How do I define a unique key on an entity?
+  expect_file: docs/Design/data-quality/unique-keys.md
+- q: How do I define a reference relationship between two entities?
+  expect_file: docs/Design/logical-model/reference-relationships.md
+- q: How does record deletion propagate across references?
+  expect_file: docs/Design/logical-model/record-deletion.md
+
+- q: What is the structure of the GD and MD tables?
+  expect_file: docs/Integrate/table-structures.md
+- q: How do I query golden records with SQL?
+  expect_file: docs/Integrate/consume-data-with-sql.md
+- q: How do I publish data into the hub using the REST API?
+  expect_file: docs/Integrate/publish-data-with-rest.md
+- q: How does a continuous load work?
+  expect_file: docs/Integrate/publish-data-with-continuous-loads.md

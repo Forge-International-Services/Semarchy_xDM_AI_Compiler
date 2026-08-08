@@ -1,0 +1,201 @@
+# Scenario 3: three sources, no shared key -> fuzzy-matched.
+# postgresql, because that is the hub this model is built for and deployed to. It was
+# `snowflake` (the D13 aspiration) while every deploy script overrode it in code — and
+# that override was hiding a real constraint: METAPHONE, which the phonetic enricher
+# needs, is PostgreSQL-only and absent from Snowflake's function list.
+# `PartyHubProbe`, not `PartyHub`. Scenario 3 was stood up by hand, one call at a time,
+# before agent.build existed, and the model was created on the lab under the probe name
+# while this file kept the design name. `deploy_scenario` keys the whole write path on
+# `model.name` — create_model, import_replace and deploy all take it — so with `PartyHub`
+# here a redeploy would CREATE a second model and leave PartyHubLocation serving the old
+# one. Renaming the file to match the instance is the safe direction; renaming the
+# deployed model is not, because a location's binding is to the name.
+# The label matches the live object too. A redeploy should change what it set out to
+# change and nothing else.
+model: {name: PartyHubProbe, label: Party Hub Probe, target_technology: postgresql}
+
+# Without at least one ModelPrivGrant the model deploys and certifies, and then
+# every read is refused: "Permission Denied. READ ... is not authorized". The REST
+# certify endpoint reports this as an EMPTY enrichedRecord and HTTP 200, so the model
+# looks like it is doing nothing rather than like it is refusing. Mirrors what the
+# vendor's own CustomerTraining model grants.
+roles:
+  - name: semarchyAdmin
+    role_name: semarchyAdmin
+    label: Semarchy Administrator
+    description: Full data administration and integration access for the probe.
+    data_admin: true
+    integration_ws: true
+
+publishers:
+  - {name: Marketing, code: MARKETING, label: Marketing Contacts}
+  - {name: Events,    code: EVENTS,    label: Event Attendees}
+  - {name: Support,   code: SUPPORT,   label: Support Parties}
+
+entities:
+  - name: Party
+    type: fuzzy
+    label: Party
+    subject_name: FullName
+    # The golden-ID generator MUST agree with the PK attribute's datatype. The corpus
+    # default is SEQUENCE, and with a UUID primary key that emits
+    # `PARTY_GOLDEN_ID = nextval('SEQ_PARTY')` into a uuid column: the model deploys,
+    # the load persists, and the INTEGRATE_DATA job then fails on "Handle Reset
+    # Matching", suspending the queue. OBSERVED 2026-08-04.
+    golden_id_generation: UUID
+    attributes:
+      - {name: PartyGoldenId, type: UUID, pk: true, mandatory: true}
+      - {name: FullName, type: String, length: 200, searchable: true,
+         mandatory: true, mandatory_scope: POST_CONSO}
+      - {name: NormalizedName, type: String, length: 200}
+      - {name: PhoneticNameToken, type: String, length: 64}
+      - {name: Email, type: String, length: 255, searchable: true}
+      - {name: NormalizedEmail, type: String, length: 255}
+      - {name: SourceKey, type: String, length: 64}
+    complex_attributes:
+      - {name: Address, type: AddressType}
+
+complex_types:
+  - name: AddressType
+    members:
+      - {name: Street, type: String, length: 200}
+      - {name: City, type: String, length: 100}
+      # Both are sized for the RAW inbound value, not the normalized one. The
+      # NormalizeAddress enricher runs PRE_CONSO, i.e. AFTER the record is persisted
+      # to MD, so a source value that overflows the column is rejected on persist and
+      # the enricher never gets to trim it: "Length exceeded for value 78701-1234
+      # (value length: 10, max length: 5)". Sizing to the output is a design error.
+      - {name: StateCode, type: String, length: 10}
+      - {name: Zip5, type: String, length: 10}
+
+lov_types: []
+references: []
+user_defined_types: []
+external_dependencies: []
+
+# ------------------------------------------------------------------- workflows
+#
+# ################## THIS RUNS. 2026-08-06, PartyHubLocation. ##########################
+#
+#   deploy    204, DL_READY, deploymentDate 2026-08-06T14:54:30.369Z
+#   start     POST workflow-definitions/ReviewQueue/start -> 200, instance 1
+#   instance  IN_PROGRESS, currentStep = the `review` user task
+#   task      "Review suggested merges", candidates [steward_admin, hub_admin]
+#   kill      instance KILLED, task KILLED, goldens unchanged at 1 over 3 masters
+#
+# It took FOUR deploys to get here and the first three were all this section:
+#
+#   control   the committed D7 baseline, byte-identical to what was served  -> 204
+#   attempt   stepper + 227 ComponentProperties + this workflow             -> 500
+#   attempt   ditto, stepper shape corrected                                -> 500
+#   split     ditto, workflows removed                                      -> 204
+#   THEN      the same workflow with MEASURED shapes                        -> 204
+#
+# What changed between the last two lines was not the design — it is the same three
+# steps, the same SLA, the same refs. It is that `emit_workflow` had been INVENTING the
+# StartEvent, EndEvent, rootEntities and transition shapes, because the only harvested
+# definition was an invalid draft containing neither event (LESSONS §48). One valid
+# export from the builder settled all four in an hour (LESSONS §51).
+# #####################################################################################
+#
+# The first workflow this compiler has ever DEPLOYED. Emission landed verified to
+# EXPORTABLE — a generated definition imports at 204 and survives a re-export — and
+# EXPORTABLE is three bars below what this section is for:
+#
+#     round-trips != importable != deployable != runnable
+#
+# Deliberately minimal, because s3 is the RUNNING application. One start, one human
+# task, one end. No Automation: four of the five automation `type` wire spellings are
+# unattested (emit_workflow.UNATTESTED_WIRE_TYPES), and an unattested spelling is not
+# something to discover on the hub a steward is using.
+#
+# No `start_context` either. The four contexts decide how an instance BEGINS, and the
+# only one that needs nobody to click anything — START_FROM_COMPLETED_BATCH — fires on
+# every finished batch over `root_entities`. Turning that on for a live location means
+# the next INTEGRATE_DATA run opens tasks nobody asked for. Leaving it null keeps the
+# definition startable by REST and by an explicit action, which is what a first deploy
+# should be: something you start on purpose.
+workflows:
+  - name: ReviewQueue
+    label: Review Queue
+    # IR-028 rule 3: the Entities section may not be empty, and rule 4: the entity a
+    # task's stepper authors must be declared here. Both came straight off the builder's
+    # validation panel — "The root entity and its child entities manipulated in the
+    # selected stepper must be declared in the Entities section" — and neither could
+    # have been read out of the draft, which broke both.
+    root_entities: [Party]
+    # THE ONLY START CONTEXT WITH A MEASURED WIRE SPELLING. The docs and the builder both
+    # call this "Start from Empty Selection"; the product writes `START_FROM_NOTHING`.
+    # The other three context names are doc-derived and now known to be untrustworthy on
+    # the wire, so `emit_workflow` refuses them rather than guessing.
+    #
+    # AND IT IS SEMANTICALLY WRONG HERE, which is worth saying out loud rather than
+    # hiding behind the fact that it compiles. "Empty selection" means AUTHOR NEW
+    # RECORDS; a review queue wants START_FROM_SELECTION — pick the flagged party and
+    # work it. This probe is measuring whether a generated workflow DEPLOYS AND RUNS at
+    # all, and one attested value beats a semantically apt guess for that question. The
+    # moment START_FROM_SELECTION is harvested, this line should change.
+    start_context: START_FROM_EMPTY_SELECTION
+    # The workflow admin can reassign and cancel instances. semarchyAdmin is the one
+    # role this model grants; anything else would be a name with no grant behind it,
+    # which IR-028 warns about precisely because the assignee then reaches a task and
+    # can open nothing.
+    admin_role: semarchyAdmin
+    steps:
+      # IR-028 refuses a definition with no StartEvent or no EndEvent, and refuses any
+      # step with no path from one to the other. That rule came from the check the
+      # harvested sample could NOT supply: the operator's draft has neither event, so it
+      # attests the field grammar while being an invalid workflow.
+      - type: StartEvent
+        name: start
+        label: Start
+        transitions:
+          - {to_step: review}
+
+      - type: UserTask
+        name: review
+        label: Review suggested merges
+        # Every one of these is a NAME-PATH into things this same compile emits, and
+        # nothing resolves them at import — a dangling ref lands in the model intact and
+        # the screen is simply empty. That is the opposite of a UUID ref's failure mode,
+        # and it is why IR-028 resolves all four against the app IR offline.
+        application: PartyHub              # app.yaml applications[].name
+        entity: Party
+        stepper: AuthorParty               # app.yaml steppers[] — see the note there
+        my_tasks_collection: PartyReviewQueue
+        assignee_required_role: semarchyAdmin
+        time_limit:
+          # MINUTES, always. 2880 = two days. The unit conversion belongs here, in the
+          # one place the number is written, and not in prose that says "2 days" beside
+          # a field the product reads as minutes.
+          max_duration_minutes: 2880
+          # The steward queue has no escalation path yet, so the deadline notifies the
+          # workflow admin rather than a role that does not exist. notify_role stays
+          # null for the same reason.
+          notify_admin: true
+        transitions:
+          - {to_step: done}
+
+      - type: EndEvent
+        name: done
+        label: Done
+
+# Answered by the operator 2026-08-03 and designed in 04-app-plan.md § The steward
+# queue: duplicate manager (mandatory) + business view of pending items + workflow
+# user tasks for assignment + a cron-scheduled data notification to a REST endpoint
+# for the unattended-item reminder, since data notifications cannot target email.
+acknowledged_gaps:
+  - "CA-003:Party"
+  # CA-018 on both address members. These are REAL — the raw StateCode and the raw Zip
+  # are overwritten by NormalizeAddress and are unrecoverable, exactly as §47 describes,
+  # and scenario 4 has now been restructured to avoid it.
+  #
+  # Acknowledged here rather than fixed because this model is the DEPLOYED, RUNNING
+  # application with certified data behind it. Splitting a complex-type member is a
+  # schema change: it needs a redeploy of the live app and a migration for records that
+  # already went through the old enricher, whose raw values are already gone. Doing that
+  # quietly as part of an unrelated change is how a running hub breaks.
+  #
+  # This is a deferral with a known cost, not a judgement that the pattern is fine.
+  - "CA-018:Party/NormalizeAddress.Address.StateCode"
+  - "CA-018:Party/NormalizeAddress.Address.Zip5"

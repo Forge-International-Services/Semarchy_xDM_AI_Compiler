@@ -1,0 +1,88 @@
+enrichers:
+  - entity: Customer
+    name: NormalizeEmail
+    kind: semql
+    scope: PRE_CONSO
+    expressions:
+      - {attribute: Email, expression: "LOWER(TRIM(Email))"}
+
+validations:
+  # Designed in 02-certification.md; previously missing from the IR, which the
+  # completeness advisor (CA-001) caught.
+  - {entity: Customer, name: EmailPresent, scope: PRE_CONSO,
+     condition: "Email IS NOT NULL"}
+  - {entity: Customer, name: CustomerNumberPositive, scope: PRE_CONSO,
+     condition: "CustomerNumber > 0"}
+
+matchers: []          # ID-matched merges on the identifier; a matcher is optional
+
+survivorship:
+  # The Master ID rule: which matched master record's ID becomes the golden ID.
+  # Mandatory on every matched entity — without it the deploy dies in
+  # Entity.getIdSurvivorshipRule. Takes rankings, no attributes, no override.
+  - entity: Customer
+    name: MasterIdRule
+    kind: id
+    strategy: PREFERRED_PUBLISHER
+    attributes: []
+    publisher_rankings: [CrmEu, CrmUs]
+  - entity: Customer
+    name: PreferMostRecent
+    strategy: PREFERRED_PUBLISHER
+    attributes: [FullName, Email]
+    publisher_rankings: [CrmEu, CrmUs]
+  - entity: Customer
+    name: RegionCodeRule
+    strategy: PREFERRED_PUBLISHER
+    attributes: [RegionCode]
+    publisher_rankings: [CrmEu, CrmUs]
+  # Designed in 02-certification.md § survivorship and finally emitted 2026-08-05, once
+  # the datatype blocker its absence was waiting on turned out to be long gone.
+  #
+  # Finance treats the limit as the maximum extended by ANY system, so this is a
+  # value-comparing strategy rather than a source-authority one — and it therefore
+  # takes NO publisher ranking. That is the point of including it: every other rule in
+  # every scenario so far has been PREFERRED_PUBLISHER (40 of the 43 in the corpus),
+  # so this is the first time the emitter is asked for a strategy whose inputs are the
+  # values rather than the publishers.
+  - entity: Customer
+    name: CreditLimitRule
+    strategy: LARGEST_VALUE
+    attributes: [CreditLimit]
+    override_strategy: NO_OVERRIDE
+  # Raised by CA-002 the moment UpdatedAt was restored, and answered rather than
+  # acknowledged: on a timestamp, "the most recent write wins" IS the largest value.
+  # A row's audit stamp is not something a steward should be able to override.
+  - entity: Customer
+    name: UpdatedAtRule
+    strategy: LARGEST_VALUE
+    attributes: [UpdatedAt]
+    override_strategy: NO_OVERRIDE
+
+# The integration job. Added 2026-08-07 by IR-030, which was written after scenario 4
+# reached DL_READY, accepted twelve records into a load, and then had every SUBMIT
+# refused: "Job [INTEGRATE_DATA] does not exist. Known jobs are []".
+#
+# s2 had the same hole. It never showed because s2 has never been asked to run — which
+# is the argument for the rule rather than for a third scenario finding out the same
+# way. NOT VERIFIED ON A LIVE INSTANCE: s2 has no data location on the lab today, so
+# this block has been offline-checked and compiled and nothing more. Deployable is not
+# runnable, and neither is "the gate stopped complaining".
+#
+# One entity, so no ordering question. All six flags true, matching every ModelJobTask
+# in the corpus — including `match`, which on an ID-matched entity merges on the
+# identifier whether or not a matcher is declared.
+jobs:
+  - name: INTEGRATE_DATA
+    job_type: INTEGRATION
+    queue: Default
+    description: Load and certify Customer from both CRMs.
+    tasks:
+      - entity: Customer
+        position: 1
+        source_validation: true
+        source_enrichment: true
+        match: true
+        consolidation: true
+        consolidated_enrichment: true
+        post_conso_validation: true

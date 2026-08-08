@@ -1,0 +1,141 @@
+{
+ "e2eTests": [],
+ "workflowDefinitions": [
+  {
+   "name": "test",
+   "label": "Test",
+   "workflowAdminRole": null,
+   "rootEntities": [],
+   "steps": [
+    {
+     "x-type": "UserTask",
+     "name": "assignment",
+     "label": "Assignment",
+     "icon": null,
+     "position": {
+      "x": -130.0,
+      "y": -210.0
+     },
+     "application": {
+      "ref": [
+       "CustomerB2C"
+      ]
+     },
+     "assigneeRequiredRole": {
+      "ref": [
+       "DataSteward"
+      ]
+     },
+     "assigneeCondition": "",
+     "assigneeCanRelease": true,
+     "taskType": "DATA_AUTHORING",
+     "entity": {
+      "ref": [
+       "Person"
+      ]
+     },
+     "stepper": {
+      "ref": [
+       "Person",
+       "AuthorPersons"
+      ]
+     },
+     "myTasksConfiguration": {
+      "collection": {
+       "ref": [
+        "Person",
+        "PersonConfirmMatchesCollection"
+       ]
+      }
+     },
+     "transitions": [],
+     "taskAssignmentNotifications": {
+      "enableCandidateNotifications": true,
+      "enableAssigneeNotifications": true
+     },
+     "taskTimeLimitNotifications": {
+      "maxDurationMinutes": null,
+      "notifyCandidatesOrAssignee": false,
+      "notifyAdmin": false,
+      "notifyRole": null
+     },
+     "taskWorkflowDueDateNotifications": {
+      "notifyCandidatesOrAssignee": false
+     }
+    },
+    {
+     "x-type": "Automation",
+     "name": "autoTest",
+     "label": "Auto Test",
+     "icon": null,
+     "position": {
+      "x": -80.0,
+      "y": -80.0
+     },
+     "type": "EMAIL",
+     "rootEntity": null,
+     "conditionForDeletion": null,
+     "deleteType": "SOFT_DELETE",
+     "deleteAuthorExpression": null,
+     "integrationJob": null,
+     "submitUserExpression": null,
+     "application": {
+      "ref": [
+       "CustomerB2C"
+      ]
+     },
+     "replyTo": "",
+     "senderName": "test@claude.com",
+     "to": [
+      {
+       "name": "receipient",
+       "sourceType": "USERS_FROM_ROLE",
+       "roleValue": {
+        "ref": [
+         "DataSteward"
+        ]
+       },
+       "semqlValue": ""
+      }
+     ],
+     "recipientMaxCount": 1000,
+     "customParameters": [],
+     "subject": "urgent",
+     "contentType": "HTML_PREFORMATTED",
+     "body": "check this out",
+     "failOnError": true,
+     "workflowMetadataChanges": [],
+     "databaseProcedureName": null,
+     "databaseProcedureArguments": [],
+     "transition": {
+      "toStep": {
+       "ref": [
+        "assignment"
+       ]
+      },
+      "labelDistance": 0.5,
+      "labelOffset": 0.0,
+      "bendPoints": [],
+      "name": "outgoing",
+      "label": "Outgoing"
+     }
+    }
+   ],
+   "generalProperties": {
+    "attachmentMaxFileSize": 10000,
+    "attachmentMaxFileCount": 5,
+    "attachmentMimeTypes": "*"
+   },
+   "retentionPolicy": {
+    "retentionType": "FOREVER",
+    "retentionDuration": null,
+    "retentionTimeUnit": "DAYS"
+   },
+   "notifications": {
+    "notifyAdminOnWorkflowDueDate": false
+   },
+   "x-spec-version": "1.12"
+  }
+ ],
+ "x-spec-version": "1.12"
+}

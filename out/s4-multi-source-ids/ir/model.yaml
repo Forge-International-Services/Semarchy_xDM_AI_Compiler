@@ -1,0 +1,117 @@
+# Scenario 4: three systems, each with its own key AND carrying the others' keys.
+#
+# postgresql, because that is the hub this model is deployed to. Declared here rather
+# than patched at deploy time: a script that overrides it is a place where the model and
+# the truth disagree indefinitely, and that exact override is what hid METAPHONE being
+# PostgreSQL-only (scenario 3, 2026-08-04).
+model: {name: AccountHub, label: Account Hub, target_technology: postgresql}
+
+# Without a ModelPrivGrant the model imports, deploys and certifies, and then refuses
+# every read — reported by the certify endpoint as HTTP 200 with an empty
+# enrichedRecord, so it reads as inert rather than as denying. Raised by CA-017, which
+# was written after this scenario sat with no grant at all.
+roles:
+  - name: semarchyAdmin
+    role_name: semarchyAdmin
+    label: Semarchy Administrator
+    description: Full data administration and integration access.
+    data_admin: true
+    integration_ws: true
+
+publishers:
+  - {name: Sfdc,    code: SFDC,    label: Salesforce}
+  - {name: Erp,     code: ERP,     label: ERP}
+  - {name: Billing, code: BILLING, label: Billing Platform}
+
+entities:
+  - name: Customer
+    type: fuzzy
+    label: Customer
+    subject_name: Name
+    # The PK is a UUID, so the golden-ID generator must be UUID too. The schema default
+    # is SEQUENCE — the corpus majority, and right for the String and numeric keys it
+    # was derived from — which here would emit nextval() into a uuid column. That
+    # imports, deploys and loads, and then kills the INTEGRATE_DATA job on "Handle Reset
+    # Matching". Same defect as scenario 3; caught offline this time by IR-026.
+    golden_id_generation: UUID
+    attributes:
+      - {name: CustomerGoldenId, type: UUID, pk: true, mandatory: true}
+      - {name: Name, type: String, length: 200, searchable: true,
+         mandatory: true, mandatory_scope: POST_CONSO}
+      - {name: NormalizedName, type: String, length: 200}
+      # Carried cross-references. NOT B_SOURCEID — that is a built-in SD/SE/MD column,
+      # not a modelled attribute. These are ordinary attributes holding other systems'
+      # identifiers, which is what makes the deterministic match rules possible.
+      - {name: SfdcKey, type: String, length: 18, searchable: true}
+      - {name: ErpKey, type: String, length: 40, searchable: true}
+      - {name: BillingKey, type: String, length: 40, searchable: true}
+      # Normalized forms of the carried keys, in their OWN attributes. LESSONS §47:
+      # the publisher's value and a derived value are different facts. Until 2026-08-05
+      # NormalizeCarriedKeys wrote UPPER(TRIM(...)) back over ErpKey and BillingKey, so
+      # the value the publisher actually sent was gone after the first load and there is
+      # no un-TRIM. Raised as CA-018, which now asks the question on every scenario.
+      - {name: ErpKeyNorm, type: String, length: 40, searchable: true}
+      - {name: BillingKeyNorm, type: String, length: 40, searchable: true}
+    complex_attributes:
+      - {name: Address, type: AddressType}
+
+  - name: Opportunity
+    type: basic
+    label: Opportunity
+    subject_name: Name
+    attributes:
+      - {name: OpportunityId, type: String, length: 18, pk: true, mandatory: true,
+         mandatory_scope: PRE_CONSO}
+      - {name: Name, type: String, length: 200, searchable: true}
+      - {name: Amount, type: Decimal, precision: 18, scale: 2}
+
+complex_types:
+  - name: AddressType
+    members:
+      # Sized for the RAW inbound value, not the normalized one. NormalizeAddress runs
+      # PRE_CONSO, i.e. AFTER the record is persisted, so a source value that overflows
+      # is rejected on persist and the enricher never gets to trim it.
+      - {name: StateCode, type: String, length: 10}
+      - {name: Zip, type: String, length: 20}
+      # Derived, in their own members (§47). The Zip5 the matcher bins on is NOT the
+      # Zip the publisher sent — a ZIP+4 and a 5-digit ZIP are different facts, and
+      # overwriting one with the other is the exact case §47 describes: vendor-shaped
+      # values sitting in an attribute the source never populated that way.
+      - {name: StateCodeNorm, type: String, length: 2}
+      - {name: Zip5, type: String, length: 5}
+
+references:
+  # Customer is FUZZY, so SD_OPPORTUNITY loads FP_CUSTOMER + FS_CUSTOMER — never
+  # F_CUSTOMER. Had Customer come out ID-matched, the same reference would load a
+  # single F_CUSTOMER instead, which is why entity type changes the integration
+  # contract of every referencing table.
+  # Self-reference: the customer hierarchy. Customer is FUZZY, so a child row loads
+  # FP_PARENT + FS_PARENT with the PARENT's publisher and source id — not its own.
+  # POST_CONSO because before consolidation the parent may not exist as a golden
+  # record yet, and a PRE_CONSO scope would reject legitimate rows.
+  - name: CustomerParent
+    from_entity: Customer
+    to_entity: Customer
+    from_role: Child
+    to_role: Parent
+    one_to_many: false
+    delete_propagation: RESTRICT
+    validation_scope: POST_CONSO
+
+  - name: OpportunityCustomer
+    from_entity: Opportunity
+    to_entity: Customer
+    from_role: Opportunities
+    to_role: Customer
+    one_to_many: false
+    delete_propagation: RESTRICT
+    validation_scope: PRE_CONSO
+
+lov_types: []
+user_defined_types: []
+external_dependencies: []
+
+# Answered in 04-app-plan.md § The steward queue — the pattern agreed for scenario 3,
+# with a smaller expected queue because two of three rules are deterministic.
+acknowledged_gaps:
+  - "CA-003:Customer"

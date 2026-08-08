@@ -1,0 +1,81 @@
+enrichers:
+  # PRE_CONSO: matching reads NameToken, so it must exist on master records.
+  - entity: Customer
+    name: NormalizeName
+    kind: semql
+    scope: PRE_CONSO
+    expressions:
+      - {attribute: NameToken, expression: "UPPER(TRIM(FullName))"}
+
+validations:
+  - entity: Customer
+    name: EmailPresent
+    scope: PRE_CONSO
+    condition: "Email IS NOT NULL"
+
+matchers:
+  - entity: Customer
+    policy: {auto_merge_at: 95, review_from: 80}
+    rules:
+      - name: ExactEmail
+        score: 100
+        condition: "Record1.Email = Record2.Email"
+        binning: ["Email"]
+      - name: NameAndZip
+        score: 90
+        condition: "Record1.NameToken = Record2.NameToken AND Record1.Address.Zip5 = Record2.Address.Zip5"
+        binning: ["Address.Zip5"]
+
+survivorship:
+  # Every matched entity needs exactly one of these — it decides which matched master
+  # record's ID becomes the golden ID. Omit it and the model imports fine and then
+  # fails to deploy (IR-019).
+  - entity: Customer
+    name: MasterIdRule
+    kind: id
+    strategy: PREFERRED_PUBLISHER
+    attributes: []
+    publisher_rankings: [Crm, Sales, Marketing]
+  - entity: Customer
+    name: PreferCrmName
+    strategy: PREFERRED_PUBLISHER
+    attributes: [FullName]
+    publisher_rankings: [Crm, Sales, Marketing]
+
+# The catch-all, in the shape the corpus attests: `default_rule: true` with an EMPTY
+# scope, because the flag already means "every attribute no other rule claims". Every
+# working matched entity measured has exactly one — corpus model A's Organization and s3's
+# Party — and s4 had none, which is one of the three defects that stopped its
+# integration job from generating (LESSONS §55.4). IR-031.
+  - entity: Customer
+    name: DefaultRule
+    default_rule: true
+    strategy: PREFERRED_PUBLISHER
+    attributes: []
+    publisher_rankings: [Crm, Sales, Marketing]
+    override_strategy: UNTIL_NEXT_USER_CHANGE
+
+# The integration job. Without one the model imports, deploys, reaches DL_READY and
+# accepts records into a load — and then every SUBMIT is refused with "Job
+# [INTEGRATE_DATA] does not exist. Known jobs are []". Measured on scenario 4,
+# 2026-08-07, at the fifth bar: SUBMITTABLE, which sits between deployable and runnable.
+#
+# The task's flags are the EXECUTABLE half of everything above. A matcher whose task
+# has `match: false` is emitted, imported, and never runs; the only symptom is a hub
+# where nothing ever merges. Every ModelJobTask in the corpus sets all six true, so
+# that is what this example does rather than switching them off to look tidy. IR-030.
+jobs:
+  - name: INTEGRATE_DATA
+    job_type: INTEGRATION
+    queue: Default
+    description: Load and certify Customer from all three publishers.
+    tasks:
+      - entity: Customer
+        position: 1
+        source_validation: true
+        source_enrichment: true
+        match: true
+        consolidation: true
+        consolidated_enrichment: true
+        post_conso_validation: true
+
